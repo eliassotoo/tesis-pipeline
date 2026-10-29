@@ -74,11 +74,12 @@ def resumen(almacen, ejecucion_id=None, ruta_informe=None):
         if not n:
             print("   No hubo pruebas para clasificar.")
             continue
-        etapas = [("escritas por la IA", n), ("se pudieron ejecutar", sum(x["compila"] for x in p)),
-                  ("pasaron siempre", sum(x["pasa"] for x in p)), ("sirvieron (cobertura nueva)", sum(x["aporta"] for x in p))]
+        etapas = [("escritas por la IA", n), ("arrancan (control 1)", sum(x["compila"] for x in p)),
+                  ("dan bien las 5 veces (control 2)", sum(x["pasa"] for x in p)),
+                  ("APROBADAS (control 3)", sum(x["aporta"] for x in p))]
         for i, (texto, cant) in enumerate(etapas):
             pct = "" if i == 0 else f"{_coma(100 * cant / n, 0):>5}%"
-            print(f"   {cant:>4}  {texto:<30}{pct}")
+            print(f"   {cant:>4}  {texto:<34}{pct}")
         completas = [c for c in lista if c["estado"] == "completo"]
         if completas:
             ini = st.mean(c["cobertura_inicial"] for c in completas)

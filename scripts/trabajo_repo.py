@@ -393,7 +393,7 @@ def main():
     cov1, codigo, texto = medir_cobertura(repo, orden["fuente"], salida / "cobertura_final.xml",
                                           objetivo=CARPETA_PRUEBAS,
                                           timeout_prueba=orden["herramienta"]["timeout_prueba_seg"])
-    paso(f"Paso 5/5  Midiendo cuánto código quedó revisado con las pruebas que sirvieron: {coma(cov1)}%")
+    paso(f"Paso 5/5  Midiendo cuánto código quedó revisado con las pruebas aprobadas: {coma(cov1)}%")
     resultado["cobertura_final"] = cov1
     shutil.copytree(repo / CARPETA_PRUEBAS, salida / CARPETA_PRUEBAS, dirs_exist_ok=True)
     guardar("completo")

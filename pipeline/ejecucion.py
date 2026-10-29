@@ -186,8 +186,8 @@ def ejecutar(cfg, almacen, aptos, sin_docker=False):
             cats = {f["categoria"]: f["n"] for f in almacen.consultar(
                 "SELECT categoria, COUNT(*) AS n FROM pruebas WHERE corrida_id=? GROUP BY categoria", (corrida_id,))}
             if cats:
-                print(f"   Clasificación: {cats.get('aceptada', 0)} sirvieron, {cats.get('sin_aporte', 0)} funcionan "
-                      f"pero no suman, {cats.get('falla', 0)} no pasaron, {cats.get('no_compila', 0)} mal escritas")
+                print(f"   Clasificación: {cats.get('aceptada', 0)} aprobadas, {cats.get('sin_aporte', 0)} correctas pero repetidas, "
+                      f"{cats.get('falla', 0)} dan un resultado incorrecto, {cats.get('no_compila', 0)} no arrancan")
             if resultado["estado"] != "completo":
                 print(f"   Terminó sin completarse ({resultado['estado']}): queda registrado.")
             print(f"   Tiempo: {round(time.time() - inicio)} segundos")
