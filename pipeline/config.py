@@ -11,7 +11,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 
 # Modelo de lenguaje por defecto: Gemini, que tiene plan gratuito (clave de Google AI Studio).
 # Si Google lo renombra, `python -m pipeline modelos` lista los nombres vigentes para tu clave.
-MODELO_POR_DEFECTO = "gemini/gemini-2.5-flash"
+MODELO_POR_DEFECTO = "gemini/gemini-3.6-flash"
 
 # Proveedor (lo que va antes de la barra en el nombre del modelo) -> variable de entorno con la clave.
 CLAVES_POR_PROVEEDOR = {

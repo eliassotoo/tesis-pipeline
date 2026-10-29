@@ -15,7 +15,7 @@ experimento:
   carpeta_resultados: resultados
 
 llm:
-  modelo: gemini/gemini-2.5-flash   # nombre vigente: python -m pipeline modelos
+  modelo: gemini/gemini-3.6-flash   # nombre vigente: python -m pipeline modelos
   # Precios para estimar el costo (USD por millón de tokens). En el plan gratuito son 0,
   # pero conviene cargar los del plan pago para estimar cuánto costaría el experimento real.
   entrada_usd_por_millon: 0

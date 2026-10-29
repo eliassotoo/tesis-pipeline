@@ -4,4 +4,4 @@ typer==0.27.3
 click==8.5.0
 PyYAML==6.0.2
 PyGithub==2.4.0
-pygount==1.8.0
+pygount==3.2.0

@@ -135,7 +135,7 @@ def _chequear_llm(modelo, api_base="", sin_docker=False, mostrar=True):
     """Manda un mensaje corto al modelo. Devuelve el código de salida (0 = funciona)."""
     codigo_py = (
         "import litellm,sys\n"
-        f"kw=dict(model={modelo!r}, messages=[{{'role':'user','content':'Respondé solo: funciona'}}], max_tokens=20)\n"
+        f"kw=dict(model={modelo!r}, messages=[{{'role':'user','content':'Respondé solo: funciona'}}], max_tokens=500)\n"
         f"kw.update(api_base={api_base!r}) if {api_base!r} else None\n"
         "r=litellm.completion(**kw)\n"
         "print('RESPUESTA DEL MODELO:', r.choices[0].message.content)\n"
