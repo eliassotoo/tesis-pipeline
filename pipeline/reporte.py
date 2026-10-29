@@ -83,7 +83,14 @@ def resumen(almacen, ejecucion_id=None, ruta_informe=None):
         if completas:
             ini = st.mean(c["cobertura_inicial"] for c in completas)
             fin = st.mean(c["cobertura_final"] or 0 for c in completas)
-            print(f"   Código revisado por pruebas: {_coma(ini)}% antes -> {_coma(fin)}% después")
+            sem = [c.get("cobertura_semillas") for c in completas if c.get("cobertura_semillas") is not None]
+            if sem:
+                base = st.mean(sem)
+                print(f"   Código revisado por pruebas: {_coma(ini)}% sin pruebas -> {_coma(base)}% solo importando "
+                      f"-> {_coma(fin)}% con las pruebas de la IA")
+                print(f"   Aporte atribuible a la IA: {_coma(fin - base)} puntos")
+            else:
+                print(f"   Código revisado por pruebas: {_coma(ini)}% antes -> {_coma(fin)}% después")
     print(f"\n{linea}")
     if ruta_informe:
         print(f"Informe completo para leer: {ruta_informe}")

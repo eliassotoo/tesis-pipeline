@@ -149,7 +149,10 @@ def ejecutar(cfg, almacen, aptos, sin_docker=False):
                                            info_maquina())
     print(f"\nPasos 2 a 5, proyecto por proyecto (queda registrado como ejecución número {ejecucion_id})")
 
+    detener = False
     for repo, raiz_codigo in aptos:
+        if detener:
+            break
         for corrida in range(1, cfg["experimento"]["corridas_por_repo"] + 1):
             carpeta = base / repo["nombre"] / f"corrida_{corrida}"
             if carpeta.exists():  # resultados de una ejecución anterior de la misma corrida
@@ -186,7 +189,14 @@ def ejecutar(cfg, almacen, aptos, sin_docker=False):
                 print(f"   Clasificación: {cats.get('aceptada', 0)} sirvieron, {cats.get('sin_aporte', 0)} funcionan "
                       f"pero no suman, {cats.get('falla', 0)} no pasaron, {cats.get('no_compila', 0)} mal escritas")
             if resultado["estado"] != "completo":
-                print(f"   Terminó sin completarse ({resultado['estado']}): queda registrado y se sigue.")
+                print(f"   Terminó sin completarse ({resultado['estado']}): queda registrado.")
             print(f"   Tiempo: {round(time.time() - inicio)} segundos")
+            if resultado.get("error_llm_tipo") in ("cuota", "clave", "modelo"):
+                print(f"\n   SE DETIENE EL EXPERIMENTO: la IA no responde ({resultado['error_llm_tipo']}). "
+                      "Los proyectos que faltan no se procesan para no registrar datos vacíos.")
+                if resultado["error_llm_tipo"] == "cuota":
+                    print("   Cuota agotada: en el plan gratuito, esperar a que se renueve o pasar al plan pago.")
+                detener = True
+                break
     almacen.cerrar_ejecucion(ejecucion_id)
     return ejecucion_id

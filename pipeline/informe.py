@@ -44,6 +44,8 @@ ESTADOS = {
     "tiempo_agotado": "Se cortó por superar el tiempo máximo por proyecto.",
     "error_contenedor": "El entorno aislado terminó con un error antes de dejar resultados.",
     "error_cobertura_inicial": "No se pudo medir la cobertura inicial.",
+    "error_llm": "La IA no respondió (cuota agotada, servicio saturado, clave o modelo inválidos). "
+                 "Esta corrida no es un dato válido y hay que repetirla.",
 }
 
 CRITERIOS = {
@@ -105,6 +107,8 @@ def _datos(almacen, ejecucion_id):
         r["cob_ini"] = st.mean([c["cobertura_inicial"] for c in completas]) if completas else None
         r["cob_fin"] = st.mean([c["cobertura_final"] for c in completas
                                 if c["cobertura_final"] is not None]) if completas else None
+        sem = [c.get("cobertura_semillas") for c in completas if c.get("cobertura_semillas") is not None]
+        r["cob_sem"] = st.mean(sem) if sem else None
         r["estados"] = [c["estado"] for c in r["corridas"]]
     # Criterios de selección: el registro más reciente de cada (repo, criterio)
     sel = almacen.consultar(
@@ -151,11 +155,20 @@ def _cobertura(r):
     if ini is None:
         return ""
     fin_v = fin if fin is not None else 0
+    sem = r.get("cob_sem")
+    fila_sem = nota_sem = ""
+    if sem is not None:
+        fila_sem = (f'<div class="cob-fila"><span>Solo importando</span><div class="cob-barra">'
+                    f'<div style="width:{max(sem, 0.4):.1f}%"></div></div><strong>{_n(sem)}%</strong></div>')
+        nota_sem = (f'<p class="nota">Importar los archivos, sin ninguna prueba, ya cubre {_n(sem)}%. '
+                    f'Lo que aportan las pruebas de la IA es la diferencia: <strong>{_n(fin_v - sem)} puntos</strong>.</p>')
     return f"""
       <div class="cobertura">
         <p class="cob-titulo">Qué parte del código queda revisada por pruebas</p>
-        <div class="cob-fila"><span>Antes</span><div class="cob-barra"><div style="width:{max(ini, 0.4):.1f}%"></div></div><strong>{_n(ini)}%</strong></div>
-        <div class="cob-fila"><span>Después</span><div class="cob-barra despues"><div style="width:{max(fin_v, 0.4):.1f}%"></div></div><strong>{_n(fin)}%</strong></div>
+        <div class="cob-fila"><span>Sin pruebas</span><div class="cob-barra"><div style="width:{max(ini, 0.4):.1f}%"></div></div><strong>{_n(ini)}%</strong></div>
+        {fila_sem}
+        <div class="cob-fila"><span>Con la IA</span><div class="cob-barra despues"><div style="width:{max(fin_v, 0.4):.1f}%"></div></div><strong>{_n(fin)}%</strong></div>
+        {nota_sem}
       </div>"""
 
 
@@ -499,7 +512,7 @@ p { max-width: 68ch; }
 
 .cobertura { margin-top: 1.3rem; padding-top: 1rem; border-top: 1px dashed var(--linea); }
 .cob-titulo { margin: 0 0 .5rem; font-weight: 600; }
-.cob-fila { display: grid; grid-template-columns: 4.8rem 1fr 4.2rem; gap: .9rem; align-items: center; margin: .3rem 0; }
+.cob-fila { display: grid; grid-template-columns: 9rem 1fr 4.2rem; gap: .9rem; align-items: center; margin: .3rem 0; }
 .cob-fila strong { text-align: right; font-variant-numeric: tabular-nums; }
 .cob-barra { height: .85rem; background: var(--codigo); border-radius: 3px; }
 .cob-barra div { height: 100%; background: var(--meta); border-radius: 3px; }

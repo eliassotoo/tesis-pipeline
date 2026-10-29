@@ -230,6 +230,9 @@ def ejecutar(config: Path,
         typer.echo(f"Falta la clave de API: el modelo {cfg['llm']['modelo']} necesita la variable {variable}.")
         typer.echo("Cargala como Secret de Codespaces (GUIA.md, sección 4) y reiniciá el Codespace.")
         raise typer.Exit(1)
+    if not (cfg["llm"]["entrada_usd_por_millon"] or cfg["llm"]["salida_usd_por_millon"]):
+        typer.echo("AVISO: los precios del modelo en el YAML están en 0, así que el límite de costo por proyecto "
+                   "(RNF-04) no va a actuar. Cargá entrada_usd_por_millon y salida_usd_por_millon.\n")
     almacen = Almacen(DB)
     typer.echo("=" * 72)
     typer.echo(f"PIPELINE DE EVALUACIÓN  experimento: {cfg['experimento']['nombre']}")

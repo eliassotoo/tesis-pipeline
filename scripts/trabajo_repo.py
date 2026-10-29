@@ -192,6 +192,29 @@ def extraer_intentos(db):
     } for f in filas]
 
 
+# Errores del PROVEEDOR del modelo (no de las pruebas): si aparecen, la corrida no es un dato válido.
+# Se buscan nombres de excepción de LiteLLM y estados de la API de Google, no números sueltos
+# (un "429" aislado podría ser un número de línea o un porcentaje).
+ERRORES_LLM = [
+    ("cuota", re.compile(r"RESOURCE_EXHAUSTED|RateLimitError|exceeded your current quota|\"code\": 429")),
+    ("saturado", re.compile(r"ServiceUnavailableError|\"status\": \"UNAVAILABLE\"|\"code\": 503|high demand")),
+    ("clave", re.compile(r"AuthenticationError|API_KEY_INVALID|PERMISSION_DENIED|API key not valid")),
+    ("modelo", re.compile(r"NotFoundError|\"status\": \"NOT_FOUND\"|is no longer available")),
+    ("conexion", re.compile(r"APIConnectionError|litellm\.Timeout")),
+]
+
+
+def error_del_llm(texto, codigo):
+    """Tipo de error del proveedor del modelo ('cuota', 'saturado', ...) o '' si no hubo.
+    Solo cuenta si la herramienta terminó mal: si reintentó y siguió, el error no afectó el dato."""
+    if codigo == 0:
+        return ""
+    for tipo, patron in ERRORES_LLM:
+        if patron.search(texto):
+            return tipo
+    return ""
+
+
 def tokens_del_log(texto):
     entrada = re.findall(r"Total number of input tokens used for LLM model .*?: (\d+)", texto)
     salida = re.findall(r"Total number of output tokens used for LLM model .*?: (\d+)", texto)
@@ -250,7 +273,10 @@ def generar_para_modulo(orden, repo, salida, archivo, modulo):
         if m and ronda and not DETALLE:
             paso(f"      ronda {ronda}: este archivo tiene {coma(float(m.group(1)))}% de su código revisado")
             ronda = None
-    if codigo != 0 and not DETALLE:
+    tipo_error_llm = error_del_llm(texto, codigo)
+    if tipo_error_llm:
+        paso(f"      ERROR DE LA IA ({tipo_error_llm}): el modelo no respondió; este archivo no es un dato válido")
+    elif codigo != 0 and not DETALLE:
         paso("      aviso: la herramienta terminó con un error (detalle en salida_cover_agent.log)")
     t_in, t_out = tokens_del_log(texto)
     return {
@@ -263,6 +289,7 @@ def generar_para_modulo(orden, repo, salida, archivo, modulo):
         "tokens_salida": t_out,
         "intentos": extraer_intentos(db),
         "error_herramienta": texto[-3000:] if codigo != 0 else "",
+        "error_llm": tipo_error_llm,
     }
 
 
@@ -305,11 +332,28 @@ def main():
 
     # M4 por módulo
     modulos = elegir_modulos(repo, orden["fuente"], orden["herramienta"]["max_modulos"])
+    log(f"Módulos seleccionados ({len(modulos)}): " + ", ".join(str(m.relative_to(repo)) for m in modulos))
+
+    # Línea base CON semillas (hallazgo del piloto): importar un módulo ya ejecuta su código de nivel
+    # superior (imports, constantes, definiciones de clases y funciones) y eso cuenta como cobertura.
+    # Para no atribuirle a la IA lo que aporta el solo import, se mide la cobertura con las semillas
+    # de TODOS los módulos elegidos y sin ninguna prueba. El aporte de la IA = final - esta base.
+    for archivo in modulos:
+        crear_semilla(repo, nombre_modulo(repo, archivo))
+    cov_sem, codigo, texto = medir_cobertura(repo, orden["fuente"], salida / "cobertura_semillas.xml",
+                                             objetivo=CARPETA_PRUEBAS,
+                                             timeout_prueba=orden["herramienta"]["timeout_prueba_seg"])
+    resultado["cobertura_semillas"] = cov_sem
+    paso(f"          Solo con importar los archivos elegidos (sin ninguna prueba) ya da {coma(cov_sem)}%: "
+         "esa es la base para medir lo que aporta la IA")
+    log(f"cobertura con semillas: {cov_sem}%  (código pytest {codigo})")
+
     paso(f"Paso 4/5  Pidiéndole pruebas a la IA a través de Qodo Cover, archivo por archivo "
          f"({len(modulos)} archivo{'s' if len(modulos) != 1 else ''})")
-    log(f"Módulos seleccionados ({len(modulos)}): " + ", ".join(str(m.relative_to(repo)) for m in modulos))
+
     costo = orden.get("costo", {})
     gastado = 0.0
+    errores_llm = []
     for archivo in modulos:
         # RNF-04: límite de costo por repositorio (se controla entre módulo y módulo)
         limite = costo.get("limite_repo_usd")
@@ -327,6 +371,17 @@ def main():
         log(f"{modulo}: {len(datos['intentos'])} pruebas candidatas, "
             f"{datos['tokens_entrada']}+{datos['tokens_salida']} tokens, costo estimado {datos['costo_usd']} USD")
         guardar("en_curso")
+        if datos["error_llm"]:
+            errores_llm.append(f"{datos['archivo_fuente']}: {datos['error_llm']}")
+            if datos["error_llm"] in ("cuota", "clave", "modelo"):
+                # No se arregla solo reintentando: seguir solo gastaría tiempo (y pedidos) sin producir datos
+                paso("   Se detiene este proyecto: con este error la IA no va a responder en los archivos que faltan")
+                break
+
+    if errores_llm:
+        resultado["error_llm_tipo"] = errores_llm[-1].rsplit(": ", 1)[1]
+        paso("Paso 5/5  No se mide la cobertura final: la IA falló y esta corrida hay que repetirla")
+        return guardar("error_llm", error="La IA no respondió en: " + "; ".join(errores_llm))
 
     # Cobertura final con todas las pruebas aceptadas (las que quedaron en los archivos)
     cov1, codigo, texto = medir_cobertura(repo, orden["fuente"], salida / "cobertura_final.xml",

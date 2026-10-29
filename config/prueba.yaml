@@ -10,8 +10,10 @@ experimento:
 
 llm:
   modelo: gemini/gemini-3.6-flash   # nombre vigente: python -m pipeline modelos
-  entrada_usd_por_millon: 0
-  salida_usd_por_millon: 0
+  # gemini-3.6-flash, plan pago (USD por millón de tokens, listado público al 29/10/2026;
+  # confirmar en https://ai.google.dev/pricing). Con precios en 0 el límite de costo no actúa.
+  entrada_usd_por_millon: 0.75
+  salida_usd_por_millon: 3.75
 
 herramienta:
   qodo_cover_commit: adcf55baba40e8fbf8a84e68b70d08bef1e2b9c9

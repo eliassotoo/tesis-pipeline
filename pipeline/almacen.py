@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS corridas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ejecucion_id INTEGER, experimento TEXT, repo TEXT, corrida INTEGER, estado TEXT,
     cobertura_inicial REAL, cobertura_final REAL, duracion_seg REAL,
+    cobertura_semillas REAL,
     tokens_entrada INTEGER, tokens_salida INTEGER, costo_usd REAL,
     modulos INTEGER, error TEXT, carpeta TEXT
 );
@@ -44,6 +45,11 @@ class Almacen:
         self.con = sqlite3.connect(ruta)
         self.con.row_factory = sqlite3.Row
         self.con.executescript(ESQUEMA)
+        # Migración: bases creadas antes de agregar la cobertura con semillas
+        columnas = {f["name"] for f in self.con.execute("PRAGMA table_info(corridas)").fetchall()}
+        if "cobertura_semillas" not in columnas:
+            self.con.execute("ALTER TABLE corridas ADD COLUMN cobertura_semillas REAL")
+            self.con.commit()
 
     def nueva_ejecucion(self, cfg, commit_pipeline, imagen, maquina):
         cur = self.con.execute(
@@ -69,13 +75,13 @@ class Almacen:
         mods = resultado.get("modulos", [])
         cur = self.con.execute(
             "INSERT INTO corridas (ejecucion_id, experimento, repo, corrida, estado, cobertura_inicial,"
-            " cobertura_final, duracion_seg, tokens_entrada, tokens_salida, costo_usd, modulos, error, carpeta)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " cobertura_final, duracion_seg, tokens_entrada, tokens_salida, costo_usd, modulos, error, carpeta,"
+            " cobertura_semillas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (ejecucion_id, experimento, resultado.get("repo"), resultado.get("corrida"), resultado.get("estado"),
              resultado.get("cobertura_inicial"), resultado.get("cobertura_final"), resultado.get("duracion_seg"),
              sum(m.get("tokens_entrada", 0) for m in mods), sum(m.get("tokens_salida", 0) for m in mods),
              round(sum(m.get("costo_usd", 0) for m in mods), 6), len(mods),
-             (resultado.get("error") or "")[-3000:], str(carpeta)))
+             (resultado.get("error") or "")[-3000:], str(carpeta), resultado.get("cobertura_semillas")))
         corrida_id = cur.lastrowid
         for m in mods:
             for intento in m.get("intentos", []):
