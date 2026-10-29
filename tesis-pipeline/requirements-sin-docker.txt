@@ -1,0 +1,6 @@
+# SOLO para el modo de depuración --sin-docker (plan B). Instala Qodo Cover en tu entorno.
+-r requirements.txt
+cover-agent @ git+https://github.com/qodo-ai/qodo-cover.git@adcf55baba40e8fbf8a84e68b70d08bef1e2b9c9
+pytest==9.1.1
+pytest-cov==7.1.0
+pytest-timeout==2.4.0

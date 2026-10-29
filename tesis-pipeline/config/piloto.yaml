@@ -1,0 +1,56 @@
+# =============================================================================
+# PILOTO (hito H4, sección 3.4.7) — 3 repositorios públicos reales, SIN pruebas.
+# Estos repos NO van a formar parte del conjunto final (para no sesgar el ajuste de parámetros).
+#
+# Modelo: Gemini (plan gratuito). Para cambiarlo sin tocar este archivo:
+#   python -m pipeline ejecutar config/piloto.yaml --modelo gemini/NOMBRE
+# (los nombres vigentes para tu clave se ven con:  python -m pipeline modelos)
+#
+# AVISO: kodi-cli y vertopal-cli son clientes de servicios externos; el criterio de
+# inclusión excluye ese tipo de proyectos. Revisarlos a mano antes de usarlos como dato.
+# =============================================================================
+experimento:
+  nombre: piloto
+  corridas_por_repo: 1          # piloto: 1 corrida; experimento final: 3 (Tabla 8)
+  carpeta_resultados: resultados
+
+llm:
+  modelo: gemini/gemini-2.5-flash   # nombre vigente: python -m pipeline modelos
+  # Precios para estimar el costo (USD por millón de tokens). En el plan gratuito son 0,
+  # pero conviene cargar los del plan pago para estimar cuánto costaría el experimento real.
+  entrada_usd_por_millon: 0
+  salida_usd_por_millon: 0
+
+herramienta:
+  qodo_cover_commit: adcf55baba40e8fbf8a84e68b70d08bef1e2b9c9
+  max_iteraciones: 3
+  cobertura_deseada: 100
+  ejecuciones_por_prueba: 5
+  timeout_prueba_seg: 30
+  max_modulos: 3                # pocos módulos: el plan gratuito tiene límite de pedidos por minuto
+  timeout_modulo_min: 20
+
+limites:
+  limite_costo_repo_usd: 1.00
+  tiempo_max_repo_min: 60
+  cpus: 2
+  memoria: 4g
+
+criterios:
+  lineas_min: 500
+  lineas_max: 5000
+  actividad_min_dias: 365
+
+repositorios:
+  - nombre: kodi-cli
+    url: https://github.com/JavaWiz1/kodi-cli.git
+    commit: 71ca9e10add28cefae919a3f3fc2adf47f7fa445
+    fuente: kodi_cli
+  - nombre: pyckify
+    url: https://github.com/ReiDoBrega/pyckify.git
+    commit: 7847a97e0866d85f6188c49eec3919e9b59cff63
+    fuente: pyckify
+  - nombre: vertopal-cli
+    url: https://github.com/vertopal/vertopal-cli.git
+    commit: 1dee702620b6ba7e6370df66f7cd04f2a2baf65f
+    fuente: src/vertopal

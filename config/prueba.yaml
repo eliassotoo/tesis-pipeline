@@ -1,0 +1,40 @@
+# =============================================================================
+# PRUEBA RÁPIDA — 1 repositorio público real de GitHub + Gemini.
+# Sirve para confirmar que todo el flujo funciona antes del piloto de 3 repositorios.
+#   python -m pipeline prueba
+# =============================================================================
+experimento:
+  nombre: prueba
+  corridas_por_repo: 1
+  carpeta_resultados: resultados
+
+llm:
+  modelo: gemini/gemini-2.5-flash   # nombre vigente: python -m pipeline modelos
+  entrada_usd_por_millon: 0
+  salida_usd_por_millon: 0
+
+herramienta:
+  qodo_cover_commit: adcf55baba40e8fbf8a84e68b70d08bef1e2b9c9
+  max_iteraciones: 3
+  cobertura_deseada: 100
+  ejecuciones_por_prueba: 5
+  timeout_prueba_seg: 30
+  max_modulos: 2                # solo 2 módulos: tarda unos 10 minutos y cuida el límite gratuito
+  timeout_modulo_min: 20
+
+limites:
+  limite_costo_repo_usd: 1.00
+  tiempo_max_repo_min: 30
+  cpus: 2
+  memoria: 4g
+
+criterios:
+  lineas_min: 500
+  lineas_max: 5000
+  actividad_min_dias: 365
+
+repositorios:
+  - nombre: pyckify
+    url: https://github.com/ReiDoBrega/pyckify.git
+    commit: 7847a97e0866d85f6188c49eec3919e9b59cff63
+    fuente: pyckify

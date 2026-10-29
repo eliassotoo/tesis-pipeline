@@ -1,0 +1,72 @@
+"""
+M5 (versión PRELIMINAR, hito H4) — Clasificación de cada prueba candidata.
+
+Esta versión clasifica a partir de lo que registró la propia herramienta (cover-agent):
+su veredicto, el código de salida de pytest y la salida de error. Es suficiente para el
+piloto, pero tiene un límite que hay que declarar: cover-agent anota con el MISMO motivo
+("Test failed") a una prueba que no compila, a una que falla siempre y a una inestable.
+Por eso en el hito H5 se agrega la re-ejecución independiente de cada prueba (sin red,
+N veces, con pytest-timeout), que es la clasificación definitiva del estudio.
+
+Categorías:
+  no_compila  -> error de sintaxis, de importación o nombre no definido (operacionalización de
+                 «compila» para Python, sección 3.4.4 del anteproyecto)
+  falla       -> compila, pero no pasa en todas las ejecuciones (falla o es inestable)
+  sin_aporte  -> compila y pasa, pero no aumenta la cobertura (la herramienta la descarta)
+  aceptada    -> compila, pasa y aumenta la cobertura (la herramienta la conserva)
+  error       -> la herramienta no pudo validar la prueba
+"""
+
+import ast
+import re
+
+PATRONES_NO_COMPILA = re.compile(
+    r"SyntaxError|IndentationError|TabError|ImportError|ModuleNotFoundError|NameError|"
+    r"errors? during collection|ERROR collecting"
+)
+
+
+def tiene_asercion(codigo):
+    """
+    ¿La prueba verifica algo? Recorre el árbol sintáctico (módulo ast) buscando:
+    sentencias assert, bloques `with pytest.raises(...)`, o llamadas self.assertX(...).
+    Una prueba que solo ejecuta código sin comprobar nada suma cobertura, pero no
+    cuenta como verificación significativa (ver sección 2.3 del anteproyecto).
+    """
+    try:
+        arbol = ast.parse(codigo or "")
+    except SyntaxError:
+        return False
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.Assert):
+            return True
+        if isinstance(nodo, ast.Call):
+            f = nodo.func
+            nombre = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+            if nombre in ("raises", "warns", "fail") or nombre.startswith("assert"):
+                return True
+    return False
+
+
+def clasificar(intento):
+    estado = (intento.get("estado") or "").upper()
+    motivo = intento.get("motivo") or ""
+    salida = (intento.get("stdout") or "") + "\n" + (intento.get("stderr") or "")
+    codigo = intento.get("codigo_salida")
+
+    if estado == "PASS":
+        categoria = "aceptada"
+    elif motivo.startswith("Coverage did not increase"):
+        categoria = "sin_aporte"
+    elif motivo.startswith("Test failed"):
+        categoria = "no_compila" if (codigo in (2, 4) or PATRONES_NO_COMPILA.search(salida)) else "falla"
+    else:
+        categoria = "error"
+
+    return {
+        "categoria": categoria,
+        "compila": categoria in ("aceptada", "sin_aporte", "falla"),
+        "pasa": categoria in ("aceptada", "sin_aporte"),
+        "aporta": categoria == "aceptada",
+        "tiene_asercion": tiene_asercion(intento.get("codigo_prueba")),
+    }
