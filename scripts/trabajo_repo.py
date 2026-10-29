@@ -269,10 +269,16 @@ def generar_para_modulo(orden, repo, salida, archivo, modulo):
         if m:
             ronda = f"{m.group(1)} de {m.group(2)}"
             continue
+        # Qodo Cover informa la cobertura AL EMPEZAR cada ronda (antes de generar), y la final en la
+        # línea "Reached ..." al terminar. Por eso cada ronda se muestra como "arranca con".
         m = re.search(r"Current Coverage: ([\d.]+)%", linea)
         if m and ronda and not DETALLE:
-            paso(f"      ronda {ronda}: este archivo tiene {coma(float(m.group(1)))}% de su código revisado")
+            paso(f"      ronda {ronda}: arranca con {coma(float(m.group(1)))}% del archivo revisado")
             ronda = None
+            continue
+        if m and "Reached" in linea and not DETALLE:
+            meta = "llegó a la meta" if "above target" in linea else "usó todas las rondas sin llegar a la meta"
+            paso(f"      resultado final: {coma(float(m.group(1)))}% del archivo revisado ({meta})")
     tipo_error_llm = error_del_llm(texto, codigo)
     if tipo_error_llm:
         paso(f"      ERROR DE LA IA ({tipo_error_llm}): el modelo no respondió; este archivo no es un dato válido")
