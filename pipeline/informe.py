@@ -1,13 +1,14 @@
 """
-INFORME LEGIBLE de una ejecución (página HTML autocontenida).
+INFORME DE EJECUCIÓN (página HTML autocontenida).
 
-Está escrito para alguien que NO conoce el proyecto ni el código: explica qué hizo el sistema,
-muestra el "embudo" de pruebas de cada grupo y de cada proyecto, da ejemplos reales de pruebas buenas
-y malas, y hace las dos comparaciones del diseño: grupo B (con pruebas) frente a Meta, y grupo A (sin
-pruebas) frente a grupo B. El grupo A no se compara con Meta (no son las mismas condiciones). El reporte técnico (tabla de terminal y CSV)
-sigue existiendo: python -m pipeline reporte --tecnico
+Presenta los resultados de una ejecución del pipeline en un registro formal y comprensible para un
+lector sin formación técnica: proporción de pruebas generadas que supera cada criterio de filtrado, por
+grupo y por proyecto; cobertura de código alcanzada; las dos comparaciones del diseño (grupo B frente al
+estudio de referencia y grupo A frente a grupo B) y ejemplos de pruebas generadas. El grupo A no se
+contrasta con el estudio de referencia, porque este se realizó sobre proyectos con pruebas preexistentes.
 
-No usa recursos externos (fuentes, scripts, imágenes): se abre sin internet.
+El reporte técnico (tabla de terminal y CSV) sigue disponible: python -m pipeline reporte --tecnico
+No usa recursos externos (fuentes, scripts, imágenes): se abre sin conexión.
 """
 
 import html
@@ -19,66 +20,69 @@ from pathlib import Path
 from .config import RAIZ
 from .reporte import REFERENCIA_META, TIPOS_LLAMADA, consumo as consumo_por_tipo
 
+REFERENCIA = "Alshahwan et al. (2024)"
+
 GRUPOS = {
-    "A": ("Grupo A", "Programas sin pruebas", "No tenían ninguna prueba: la IA empieza de cero."),
-    "B": ("Grupo B", "Programas con pruebas", "Ya tenían pruebas escritas por sus autores: la IA agrega más, "
-                                              "como en el estudio de Meta."),
+    "A": ("Grupo A", "Proyectos sin pruebas preexistentes",
+          "No contaban con pruebas: el modelo genera la suite de pruebas desde cero."),
+    "B": ("Grupo B", "Proyectos con suite de pruebas preexistente",
+          "Contaban con pruebas escritas por sus desarrolladores: el modelo amplía la suite existente, "
+          "en la misma condición que el estudio de referencia."),
 }
 
-# Los tres controles por los que pasa cada prueba, en lenguaje simple (pedido de la tutora: que
-# alguien sin formación técnica entienda cada número). Antes la última etapa se llamaba «Sirvieron».
+# Criterios de filtrado que atraviesa cada prueba generada (sección 2.3 del anteproyecto)
 ETAPAS = [  # (clave, título, explicación)
-    ("escritas", "Escritas por la IA", "Todas las pruebas que propuso la IA, buenas y malas."),
-    ("compila", "Control 1 · Arrancan", "Python las puede ejecutar: no tienen errores de escritura."),
-    ("pasa", "Control 2 · Dan bien las 5 veces", "Se ejecutaron 5 veces y en las 5 dieron el resultado esperado."),
-    ("aporta", "Control 3 · Revisan algo nuevo = APROBADAS",
-     "Revisan una parte del programa que ninguna otra prueba revisaba. Son las que se guardan."),
+    ("escritas", "Pruebas generadas", "Total de pruebas candidatas propuestas por el modelo."),
+    ("compila", "Criterio 1 · Compilan", "Se ejecutan sin errores de sintaxis, de importación ni de nombres no definidos."),
+    ("pasa", "Criterio 2 · Son estables", "Pasan en las 5 ejecuciones repetidas."),
+    ("aporta", "Criterio 3 · Incrementan la cobertura",
+     "Ejecutan líneas del código fuente que ninguna prueba anterior ejecutaba. Son las pruebas aceptadas."),
 ]
 
 CATEGORIAS = {
-    "aceptada": ("Aprobada", "Superó los 3 controles: arranca, da bien las 5 veces y revisa algo que antes "
-                             "nadie revisaba. Es la única que queda guardada en el proyecto."),
-    "sin_aporte": ("Correcta, pero repetida", "Superó los controles 1 y 2, pero revisa lo mismo que otra prueba "
-                                              "ya revisaba (falló el control 3). No suma nada y se descarta."),
-    "falla": ("Da un resultado incorrecto", "Arranca, pero el resultado no es el que la propia prueba esperaba, "
-                                            "o cambia de una vez a otra (falló el control 2). Se descarta."),
-    "no_compila": ("No arranca", "Tiene un error de escritura o usa algo que no existe: Python ni siquiera la "
-                                 "puede ejecutar (falló el control 1). Se descarta."),
+    "aceptada": ("Aceptada", "Cumple los tres criterios: compila, es estable e incrementa la cobertura del código "
+                             "fuente. Es la única categoría que se incorpora al proyecto."),
+    "sin_aporte": ("Válida, sin incremento de cobertura", "Compila y es estable, pero ejecuta líneas ya cubiertas por "
+                                                           "otras pruebas (no cumple el criterio 3). Se descarta."),
+    "falla": ("Fallida o inestable", "Compila, pero su resultado no coincide con el que la propia prueba espera, o "
+                                      "varía entre ejecuciones (no cumple el criterio 2). Se descarta."),
+    "no_compila": ("No compila", "Presenta errores de sintaxis o hace referencia a elementos inexistentes "
+                                 "(no cumple el criterio 1). Se descarta."),
     "error": ("Sin evaluar", "La herramienta no llegó a evaluarla."),
 }
 
 ESTADOS = {
-    "completo": "Procesado completo",
-    "no_preparable": "No se pudo preparar: falló la instalación de lo que el programa necesita. "
-                     "Queda registrado y se sigue con el siguiente; a cuántos programas les pasa es parte del estudio.",
-    "tiempo_agotado": "Se cortó por superar el tiempo máximo por programa.",
-    "error_contenedor": "El entorno aislado terminó con un error antes de dejar resultados.",
-    "error_cobertura_inicial": "No se pudo medir la cobertura inicial.",
-    "error_llm": "La IA no respondió (cuota agotada, servicio saturado, clave o modelo inválidos). "
-                 "Esta corrida no es un dato válido y hay que repetirla.",
-    "suite_falla": "Sus pruebas propias no pasan en el entorno aislado: no sirve para el grupo B y queda afuera.",
-    "fuera_de_rango": "La parte revisada al empezar quedó fuera del rango exigido a su grupo: queda afuera.",
-    "sin_modulos": "Ningún archivo tenía pruebas propias que extender y algo sin revisar: no hubo nada que hacer.",
-    "error_entorno": "El entorno aislado no tenía los ajustes del estudio: hay que reconstruir la imagen.",
+    "completo": "Procesamiento completo",
+    "no_preparable": "No fue posible instalar sus dependencias de forma automatizada. Se registra como descarte "
+                     "y el proceso continúa con el proyecto siguiente.",
+    "tiempo_agotado": "Se interrumpió por superar el tiempo máximo establecido por proyecto.",
+    "error_contenedor": "El entorno aislado finalizó con un error antes de registrar resultados.",
+    "error_cobertura_inicial": "No fue posible medir la cobertura inicial.",
+    "error_llm": "El modelo no respondió (cuota agotada, servicio saturado, clave o modelo inválidos). "
+                 "La corrida no constituye un dato válido y debe repetirse.",
+    "suite_falla": "Su suite de pruebas preexistente no pasa en el entorno aislado; no es apto para el grupo B.",
+    "fuera_de_rango": "Su cobertura inicial está fuera del rango establecido para su grupo; queda excluido.",
+    "sin_modulos": "Ningún módulo contaba con un archivo de pruebas preexistente y líneas sin cubrir.",
+    "error_entorno": "El entorno aislado no contenía los ajustes del estudio; debe reconstruirse la imagen.",
 }
 
 CRITERIOS = {
-    "tamaño": "Es un programa chico (500 a 5.000 líneas)",
-    "sin_pruebas_previas": "No tiene pruebas (grupo A)",
-    "con_pruebas_previas": "Tiene pruebas escritas por sus autores (grupo B)",
-    "cobertura_inicial": "La parte revisada al empezar está en el rango de su grupo",
-    "dependencias_declaradas": "Se puede instalar de forma automática",
-    "licencia": "Su licencia permite usarlo para investigar",
-    "actividad": "Tiene al menos un año de historia",
-    "revision_manual": "No necesita servicios externos ni contraseñas (revisión manual)",
-    "descarga": "Se pudo descargar",
+    "tamaño": "Tamaño entre 500 y 5.000 líneas de código",
+    "sin_pruebas_previas": "Sin pruebas preexistentes (grupo A)",
+    "con_pruebas_previas": "Con suite de pruebas preexistente (grupo B)",
+    "cobertura_inicial": "Cobertura inicial dentro del rango de su grupo",
+    "dependencias_declaradas": "Dependencias instalables de forma automatizada",
+    "licencia": "Licencia que permite su uso con fines de investigación",
+    "actividad": "Al menos un año de actividad registrada",
+    "revision_manual": "No requiere servicios externos ni credenciales (revisión manual)",
+    "descarga": "Repositorio descargable",
 }
 
-# Hipótesis del anteproyecto (sección 2.1): qué se esperaba del grupo A frente al grupo B
+# Hipótesis del anteproyecto (sección 2.1): lo esperado del grupo A frente al grupo B
 HIPOTESIS_AB = [
-    ("compila", "Control 1 · Arrancan", "H1"),
-    ("pasa", "Control 2 · Dan bien las 5 veces", "H1"),
-    ("significativa", "Aprobadas que comparan el resultado con lo esperado", "H2"),
+    ("compila", "Criterio 1 · Compilan", "H1"),
+    ("pasa", "Criterio 2 · Son estables", "H1"),
+    ("significativa", "Pruebas aceptadas con verificación significativa", "H2"),
 ]
 
 
@@ -153,13 +157,13 @@ def _datos(almacen, ejecucion_id):
 # Piezas de la página
 # -----------------------------------------------------------------------------------------------
 def _barra_controles(cant, total, pct, ref, titulo, clase=""):
-    """Una fila del gráfico de controles: barra proporcional + marca punteada de Meta."""
+    """Una fila del gráfico de criterios: barra proporcional + marca punteada del estudio de referencia."""
     ancho = 100 * cant / total if total else 0
     marca = ""
     if ref is not None:
         marca = (f'<span class="meta-marca" style="left:{ref}%" aria-hidden="true">'
-                 f'<span>Meta {ref:.0f}%</span></span>')
-    tip = f"{titulo}: {cant} de {total} pruebas ({_n(pct, 0)}%)" + (f". Meta: {ref:.0f}%" if ref is not None else "")
+                 f'<span>Referencia {ref:.0f}%</span></span>')
+    tip = f"{titulo}: {cant} de {total} pruebas ({_n(pct, 0)}%)" + (f". Referencia: {ref:.0f}%" if ref is not None else "")
     return f"""
           <div class="etapa-barra" role="img" aria-label="{_e(tip)}" title="{_e(tip)}">
             <div class="relleno {clase}" style="width:{max(ancho, 0.6):.1f}%"></div>
@@ -190,7 +194,7 @@ def _conteo(repos):
 
 
 def _grafico_controles(repos):
-    """GRÁFICO 1: embudo de cada grupo. La marca de Meta aparece solo en el grupo B (misma condición)."""
+    """GRÁFICO 1: embudo de cada grupo. La referencia se marca solo en el grupo B (misma condición)."""
     bloques = []
     for g in ("A", "B"):
         del_grupo = [r for r in repos if r["grupo"] == g]
@@ -200,34 +204,36 @@ def _grafico_controles(repos):
             continue
         pcts = {k: _pct(conteo[k], total) for k in ("compila", "pasa", "aporta")}
         corto, titulo, ayuda = GRUPOS[g]
-        cierre = (f"En el estudio de Meta fueron {REFERENCIA_META['aporta']:.0f} de cada 100." if g == "B" else
-                  "Acá no se marca a Meta: sus programas sí tenían pruebas, así que no es la misma situación.")
+        cierre = (f"En el estudio de referencia, ese valor fue del {REFERENCIA_META['aporta']:.0f} %." if g == "B" else
+                  "Este grupo no se contrasta con el estudio de referencia, que se realizó sobre proyectos con "
+                  "pruebas preexistentes.")
         bloques.append(f"""
     <div class="grupo-bloque grupo-{g}">
       <h3><span class="etiqueta-grupo g{g}">{corto}</span> {_e(titulo)}</h3>
       <p class="como-leer">{_e(ayuda)}</p>
       <div class="embudo">{_filas_controles(conteo, pcts, total, con_meta=(g == "B"))}</div>
-      <p class="lectura">De cada 100 pruebas que escribió la IA, <strong>{_n(pcts['aporta'], 0)} quedaron
-      aprobadas</strong>. {cierre}</p>
+      <p class="lectura">Del total de pruebas generadas, el <strong>{_n(pcts['aporta'], 0)} %</strong> fue aceptado.
+      {cierre}</p>
     </div>""")
     if not bloques:
         return ""
     return f"""
   <section id="grafico-controles" class="grafico">
-    <h2>1. De las pruebas que escribió la IA, ¿cuántas quedaron aprobadas?</h2>
-    <p class="como-leer"><strong>Cómo leerlo:</strong> cada barra muestra cuántas pruebas siguen en pie después
-    de cada control. En el grupo B, la línea punteada marca dónde quedó Meta (Facebook) en ese mismo control.</p>
+    <h2>1. Pruebas generadas que superan cada criterio de filtrado</h2>
+    <p class="como-leer"><strong>Lectura del gráfico:</strong> cada barra indica cuántas de las pruebas generadas
+    superan el criterio correspondiente. En el grupo B, la línea punteada señala el valor reportado por
+    {REFERENCIA} para el mismo criterio.</p>
     {''.join(bloques)}
   </section>"""
 
 
 def _grafico_ab(repos):
-    """GRÁFICO 2: grupo A frente a grupo B, control por control (lo que dicen las hipótesis H1 y H2)."""
+    """GRÁFICO 2: grupo A frente a grupo B, criterio por criterio (hipótesis H1 y H2)."""
     conteos = {g: _conteo([r for r in repos if r["grupo"] == g]) for g in ("A", "B")}
     if not (conteos["A"]["escritas"] and conteos["B"]["escritas"]):
         return ""
     filas = []
-    for clave, titulo, hip in HIPOTESIS_AB + [("aporta", "Control 3 · Revisan algo nuevo (aprobadas)", "")]:
+    for clave, titulo, hip in HIPOTESIS_AB + [("aporta", "Criterio 3 · Incrementan la cobertura (aceptadas)", "")]:
         celdas = []
         for g in ("A", "B"):
             c = conteos[g]
@@ -241,14 +247,16 @@ def _grafico_ab(repos):
                           f'<div class="ab-pista"><div class="ab-barra g{g}" style="width:{ancho:.1f}%"></div></div>'
                           f'<strong>{_n(v, 0)}%</strong></div>')
         nota = (f' <span class="hip">({hip})</span>' if hip else
-                ' <span class="hip">(solo descriptivo: en A, al partir de cero, casi todo «revisa algo nuevo»)</span>')
+                ' <span class="hip">(descriptivo: con cobertura inicial nula, casi toda prueba válida incrementa '
+                'la cobertura)</span>')
         filas.append(f'<div class="ab-control"><p class="ab-titulo">{_e(titulo)}{nota}</p>{"".join(celdas)}</div>')
     return f"""
   <section id="grafico-ab" class="grafico">
-    <h2>2. ¿Qué cambia cuando el programa no tiene pruebas? Grupo A frente a grupo B</h2>
-    <p class="como-leer"><strong>Cómo leerlo:</strong> para cada control, la barra A es el grupo sin pruebas y la
-    barra B el grupo con pruebas. Los dos grupos pasaron por exactamente el mismo proceso, con la misma IA: lo único
-    que cambia es si el programa ya tenía pruebas.</p>
+    <h2>2. Comparación entre grupos: efecto de la ausencia de pruebas preexistentes</h2>
+    <p class="como-leer"><strong>Lectura del gráfico:</strong> para cada criterio, la barra A corresponde al grupo sin
+    pruebas preexistentes y la barra B al grupo con suite preexistente. Ambos grupos se procesaron con el mismo
+    procedimiento, el mismo modelo y la misma herramienta; la única condición que varía es la existencia de pruebas
+    previas. La fila de verificación significativa se calcula sobre las pruebas aceptadas.</p>
     <div class="ab">{''.join(filas)}</div>
   </section>"""
 
@@ -256,26 +264,28 @@ def _grafico_ab(repos):
 def _que_es_aprobada():
     return """
   <section id="aprobada" class="recuadro">
-    <h2>¿Qué es una prueba «aprobada»?</h2>
-    <p>Una <strong>prueba</strong> es un programita que revisa si otra parte del programa funciona bien. Por
-    ejemplo: le da 2 y 3 a la función que suma y verifica que devuelva 5. Si algún día alguien rompe esa
-    función, la prueba lo detecta.</p>
-    <p>La IA escribe muchas pruebas, pero no todas sirven. Por eso cada una pasa por <strong>tres controles
-    automáticos</strong>, como en una línea de control de calidad:</p>
+    <h2>Criterios de filtrado de las pruebas generadas</h2>
+    <p>Una <strong>prueba unitaria</strong> es un programa breve que verifica de forma automática que una parte
+    del código funciona como corresponde. Por ejemplo, invoca una función que suma con los valores 2 y 3 y
+    comprueba que el resultado sea 5; si una modificación posterior altera esa función, la prueba lo detecta.</p>
+    <p>El modelo de lenguaje propone pruebas candidatas, pero no garantiza que sean correctas ni útiles. Por eso
+    cada una se somete, de forma automática y sucesiva, a los tres criterios de filtrado del enfoque de
+    Alshahwan et al. (2024):</p>
     <ol class="controles">
-      <li><strong>¿Arranca?</strong> Python tiene que poder ejecutarla. Si tiene un error de escritura, se descarta.</li>
-      <li><strong>¿Da bien siempre?</strong> Se ejecuta 5 veces y en las 5 tiene que dar el resultado que ella
-        misma espera. Si falla o cambia de una vez a otra, no es confiable y se descarta.</li>
-      <li><strong>¿Revisa algo nuevo?</strong> Tiene que revisar una parte del programa que ninguna otra prueba
-        revisaba. Si repite lo que ya estaba cubierto, no suma y se descarta.</li>
+      <li><strong>Compilación.</strong> La prueba debe poder ejecutarse sin errores de sintaxis, de importación ni
+        de nombres no definidos.</li>
+      <li><strong>Estabilidad.</strong> Se ejecuta 5 veces y debe pasar en todas. Una prueba que falla, o cuyo
+        resultado varía entre ejecuciones, no es confiable.</li>
+      <li><strong>Incremento de cobertura.</strong> Debe ejecutar líneas del código fuente que ninguna prueba
+        anterior ejecutaba. En el grupo B, esto incluye todas las pruebas escritas por los desarrolladores.</li>
     </ol>
-    <p class="destacado">Una prueba <strong>aprobada</strong> es la que superó los tres controles. Son las únicas
-    que se guardan en el proyecto; las demás se descartan solas, sin que intervenga una persona.</p>
+    <p class="destacado">Una prueba <strong>aceptada</strong> es la que cumple los tres criterios. Solo las pruebas
+    aceptadas se incorporan al proyecto; las demás se descartan sin intervención humana.</p>
   </section>"""
 
 
 def _grafico_cobertura(repos):
-    """GRÁFICO 2: qué parte de cada programa quedó revisada, separando lo que aporta el solo import."""
+    """GRÁFICO 3: cobertura alcanzada en cada proyecto, separando la cobertura previa a la generación."""
     filas = []
     for r in repos:
         fin = r.get("cob_fin")
@@ -284,11 +294,12 @@ def _grafico_cobertura(repos):
         sem = r.get("cob_sem")
         base = sem if sem is not None else 0.0
         ia = max(fin - base, 0.0)
-        origen = "solo con abrir los archivos" if r["grupo"] == "A" else "con sus pruebas preexistentes"
-        tip = f"{r['nombre']}: {_n(base)}% {origen} + {_n(ia)} puntos de la IA = {_n(fin)}% revisado"
+        origen = "atribuible a la importación de los módulos" if r["grupo"] == "A" else "de la suite preexistente"
+        tip = (f"{r['nombre']}: {_n(base)}% {origen} + {_n(ia)} puntos de las pruebas aceptadas "
+               f"= {_n(fin)}% de cobertura")
         seg_base = (f'<div class="seg seg-base" style="width:{base:.1f}%"><span>{_n(base, 0)}%</span></div>'
                     if base >= 0.5 else "")
-        seg_ia = f'<div class="seg seg-ia" style="width:{ia:.1f}%"><span>IA +{_n(ia, 0)}</span></div>' if ia >= 0.5 else ""
+        seg_ia = f'<div class="seg seg-ia" style="width:{ia:.1f}%"><span>+{_n(ia, 0)}</span></div>' if ia >= 0.5 else ""
         filas.append(f"""
       <div class="cob-proy">
         <span class="cob-nombre"><span class="etiqueta-grupo g{r['grupo']}">{r['grupo']}</span> {_e(r['nombre'])}</span>
@@ -299,26 +310,28 @@ def _grafico_cobertura(repos):
         return ""
     hay_base = any(r.get("cob_sem") is not None for r in repos)
     nota_base = ("" if hay_base else
-                 '<p class="nota">Esta ejecución no midió la parte que se revisa solo con abrir los archivos: '
-                 'todo el porcentaje aparece como aporte de la IA y puede estar sobreestimado.</p>')
+                 '<p class="nota">Esta ejecución no midió la cobertura previa a la generación: todo el porcentaje se '
+                 'muestra como incremento y puede estar sobrestimado.</p>')
     return f"""
   <section id="grafico-cobertura" class="grafico">
-    <h2>3. ¿Qué parte de cada programa quedó revisada?</h2>
-    <p class="como-leer"><strong>Cómo leerlo:</strong> cada barra es un programa completo (100%). La letra indica
-    su grupo. El color muestra qué parte quedó revisada al final y gracias a qué.</p>
+    <h2>3. Cobertura de código alcanzada en cada proyecto</h2>
+    <p class="como-leer"><strong>Lectura del gráfico:</strong> cada barra representa la totalidad del código fuente
+    de un proyecto (100 %); la letra indica su grupo. La <strong>cobertura</strong> es el porcentaje de líneas que las
+    pruebas ejecutan; las líneas no ejecutadas no están verificadas por ninguna prueba.</p>
     <div class="cob-leyenda">
-      <span><i class="muestra seg-base"></i> Ya estaba revisado antes de la IA (A: solo con abrir los archivos;
-        B: sus propias pruebas). No es mérito de la IA</span>
-      <span><i class="muestra seg-ia"></i> Lo que agregaron las pruebas aprobadas de la IA</span>
-      <span><i class="muestra vacia"></i> Quedó sin revisar</span>
+      <span><i class="muestra seg-base"></i> Cobertura previa a la generación (A: atribuible a la importación de los
+        módulos; B: suite preexistente)</span>
+      <span><i class="muestra seg-ia"></i> Incremento aportado por las pruebas aceptadas</span>
+      <span><i class="muestra vacia"></i> Código no cubierto</span>
     </div>
     <div class="cob-grafico">{''.join(filas)}
       <div class="cob-escala" aria-hidden="true"><span></span><div><span>0%</span><span>50%</span><span>100%</span></div><span></span></div>
     </div>
-    <p class="lectura">Por qué separamos el primer tramo: en el grupo B, lo que ya revisaban las pruebas de sus
-    autores. En el grupo A, al abrir un archivo Python ya recorre una parte (la lista de funciones, los valores
-    fijos), y eso cuenta como «revisado» aunque no haya ninguna prueba. Ninguna de las dos cosas es mérito de la IA:
-    <strong>su aporte real es solo el segundo tramo.</strong></p>
+    <p class="lectura">El primer tramo no se atribuye al modelo. En el grupo B corresponde a la cobertura de las
+    pruebas escritas por los desarrolladores. En el grupo A corresponde a las líneas que Python ejecuta al importar
+    un módulo (definiciones de funciones y clases, constantes), que cuentan como cubiertas aunque no exista ninguna
+    prueba. <strong>El aporte del modelo es únicamente el segundo tramo.</strong> La cobertura se mide sobre todo el
+    código fuente del proyecto, aunque solo se hayan generado pruebas para algunos de sus módulos.</p>
     {nota_base}
   </section>"""
 
@@ -333,11 +346,11 @@ def _cobertura(r):
         return ""
     sem = r.get("cob_sem")
     if sem is None:
-        return f'<p class="cob-texto">Parte del programa revisada al final: <strong>{_n(fin)}%</strong>.</p>'
-    origen = "solo con abrir los archivos" if r["grupo"] == "A" else "con las pruebas que ya tenía"
-    return (f'<p class="cob-texto">Parte del programa revisada: <strong>{_n(sem)}%</strong> {origen} '
-            f'→ <strong>{_n(fin)}%</strong> sumando las pruebas aprobadas de la IA. '
-            f'Aporte de la IA: <strong>+{_n(fin - sem)} puntos</strong>.</p>')
+        return f'<p class="cob-texto">Cobertura final: <strong>{_n(fin)}%</strong>.</p>'
+    origen = "atribuible a la importación de los módulos" if r["grupo"] == "A" else "con la suite preexistente"
+    return (f'<p class="cob-texto">Cobertura: <strong>{_n(sem)}%</strong> {origen} → <strong>{_n(fin)}%</strong> '
+            f'con las pruebas aceptadas. Incremento atribuible al modelo: <strong>{_n(fin - sem)} puntos '
+            f'porcentuales</strong>.</p>')
 
 
 def _criterios(r):
@@ -349,7 +362,7 @@ def _criterios(r):
         for c in r["criterios"])
     return f"""
       <details class="criterios">
-        <summary>Por qué este programa entró al estudio</summary>
+        <summary>Criterios de selección verificados</summary>
         <ul>{items}</ul>
       </details>"""
 
@@ -361,23 +374,24 @@ def _tarjeta_repo(r, n_corridas):
     if errores:
         aviso = "".join(f'<p class="aviso-estado">{_e(ESTADOS.get(e, e))}</p>' for e in sorted(set(errores)))
     if c["escritas"] == 0:
-        cuerpo = '<p class="vacio">No hubo pruebas para clasificar en este programa.</p>'
+        cuerpo = '<p class="vacio">No se registraron pruebas para clasificar en este proyecto.</p>'
     else:
         verificacion = ""
         if c["aporta"]:
             sin = c["aporta"] - r["aceptadas_significativas"]
-            verificacion = (f'<p class="nota-asercion">De las {c["aporta"]} aprobadas, '
-                            f'<strong>{r["aceptadas_significativas"]}</strong> comparan el resultado con lo esperado'
-                            + (f' y <strong>{sin}</strong> solo ejecutan código o comprueban algo trivial '
-                               f'(suman revisión, pero difícilmente detectarían un error).' if sin else '.')
+            verificacion = (f'<p class="nota-asercion">De las {c["aporta"]} pruebas aceptadas, '
+                            f'<strong>{r["aceptadas_significativas"]}</strong> contienen una verificación significativa '
+                            f'(comparan el resultado con un valor esperado o comprueban una excepción)'
+                            + (f' y <strong>{sin}</strong> se limitan a ejecutar código o a comprobaciones triviales: '
+                               f'incrementan la cobertura, pero difícilmente detectarían un defecto.' if sin else '.')
                             + '</p>')
         nota_corridas = (f'<p class="nota">Cantidades: suma de las {n_corridas} corridas. '
                          f'Porcentajes: promedio de las corridas.</p>' if n_corridas > 1 else "")
         cuerpo = f"""
       <div class="embudo">{_embudo(r)}</div>
       {_cobertura(r)}{verificacion}
-      <p class="resumen-repo">En total: la IA escribió <strong>{c['escritas']}</strong> pruebas para este programa y
-        <strong>{c['aporta']}</strong> quedaron aprobadas.</p>{nota_corridas}"""
+      <p class="resumen-repo">En total, el modelo generó <strong>{c['escritas']}</strong> pruebas para este proyecto,
+        de las cuales <strong>{c['aporta']}</strong> fueron aceptadas.</p>{nota_corridas}"""
     return f"""
     <article class="repo">
       <h3><span class="etiqueta-grupo g{r['grupo']}">{r['grupo']}</span> {_e(r['nombre'])}</h3>
@@ -386,7 +400,7 @@ def _tarjeta_repo(r, n_corridas):
 
 
 def _comparacion(repos):
-    """Las dos comparaciones del diseño, en tablas: B frente a Meta y A frente a B."""
+    """Las dos comparaciones del diseño, en tablas: B frente a la referencia y A frente a B."""
     con_datos = [r for r in repos if r["conteo"]["escritas"]]
     if not con_datos:
         return ""
@@ -404,23 +418,24 @@ def _comparacion(repos):
         for clave, titulo, _ in ETAPAS[1:]:
             celdas = "".join(f'<td class="num">{_n(r["pct"].get(clave), 0)}%</td>' for r in b)
             med = mediana(b, clave)
+            dif = "" if med is None else ("+" if med >= REFERENCIA_META[clave] else "−") + _n(abs(med - REFERENCIA_META[clave]), 0)
             filas.append(f"""
-        <tr><th scope="row">{_e(titulo.replace(' = APROBADAS', ''))}</th>{celdas}
+        <tr><th scope="row">{_e(titulo)}</th>{celdas}
           <td class="num"><strong>{_n(med, 0)}%</strong></td><td class="num">{REFERENCIA_META[clave]:.0f}%</td>
-          <td class="num">{'' if med is None else ('+' if med >= REFERENCIA_META[clave] else '−') + _n(abs(med - REFERENCIA_META[clave]), 0)} pts</td></tr>""")
+          <td class="num">{dif} p.p.</td></tr>""")
         partes.append(f"""
-    <h3>4.1 Grupo B frente a Meta (la replicación)</h3>
-    <p>En 2024 Meta (la empresa de Facebook e Instagram) publicó que, de cada 100 pruebas que escribió su
-    herramienta sobre programas que <strong>ya tenían pruebas</strong>, 75 arrancaron, 57 dieron bien siempre y 25
-    quedaron aprobadas. El grupo B está en esa misma situación, así que acá sí se puede comparar.</p>
+    <h3>4.1 Grupo B frente al estudio de referencia (replicación)</h3>
+    <p>{REFERENCIA} reportaron, sobre proyectos de Meta con pruebas preexistentes, que del total de pruebas generadas
+    el 75 % compiló, el 57 % fue estable y el 25 % incrementó la cobertura. El grupo B reproduce esa condición, por lo
+    que admite la comparación.</p>
     <div class="tabla-scroll"><table>
-      <thead><tr><th>Control</th>{cab}<th class="num">Grupo B (mediana)</th><th class="num">Meta 2024</th>
+      <thead><tr><th>Criterio</th>{cab}<th class="num">Grupo B (mediana)</th><th class="num">Referencia</th>
         <th class="num">Diferencia</th></tr></thead>
       <tbody>{''.join(filas)}</tbody>
     </table></div>
-    <p class="nota">Aun en la misma situación, cambian el lenguaje (Python frente a Kotlin), la IA y la herramienta
-    (Qodo Cover es la versión abierta del método de Meta). Por eso la diferencia se lee como «cuánto se parece»,
-    no como «quién es mejor».</p>""")
+    <p class="nota">Aun bajo la misma condición, difieren el lenguaje de programación (Python frente a Kotlin), el
+    modelo de lenguaje y la implementación de la herramienta (Qodo Cover es la implementación de código abierto del
+    enfoque). La diferencia indica el grado de reproducción del resultado, no una comparación de desempeño.</p>""")
     if a and b:
         filas = []
         for clave, titulo, hip in HIPOTESIS_AB:
@@ -430,35 +445,39 @@ def _comparacion(repos):
             va = ma < mb
             filas.append(f"""
         <tr><th scope="row">{_e(titulo)}</th><td class="num">{_n(ma, 0)}%</td><td class="num">{_n(mb, 0)}%</td>
-          <td>A menos que B ({hip})</td>
-          <td class="{'va' if va else 'no-va'}">{'Coincide con lo esperado' if va else 'No coincide con lo esperado'}</td></tr>""")
+          <td>Grupo A inferior al grupo B ({hip})</td>
+          <td class="{'va' if va else 'no-va'}">{'Consistente con la hipótesis' if va else 'No consistente con la hipótesis'}</td></tr>""")
         partes.append(f"""
-    <h3>4.2 Grupo A frente a grupo B (la pregunta de la tesis)</h3>
-    <p>Los dos grupos pasaron por el mismo proceso, con la misma IA y la misma herramienta: la única diferencia es
-    si el programa ya tenía pruebas. Por eso esta es la comparación que responde la pregunta del estudio.</p>
+    <h3>4.2 Grupo A frente a grupo B (pregunta de investigación)</h3>
+    <p>Ambos grupos se procesaron con el mismo procedimiento, el mismo modelo y la misma herramienta; la única
+    condición que varía es la existencia de pruebas preexistentes. Esta comparación responde la pregunta del
+    estudio.</p>
     <div class="tabla-scroll"><table>
-      <thead><tr><th>Qué se mide</th><th class="num">Grupo A (sin pruebas)</th><th class="num">Grupo B (con pruebas)</th>
-        <th>Lo que esperábamos (hipótesis)</th><th>Resultado</th></tr></thead>
+      <thead><tr><th>Indicador</th><th class="num">Grupo A</th><th class="num">Grupo B</th>
+        <th>Resultado esperado (hipótesis)</th><th>Resultado observado</th></tr></thead>
       <tbody>{''.join(filas)}</tbody>
     </table></div>""")
     elif a:
         partes.append("""
-    <p class="nota">Esta ejecución tiene solo programas del grupo A. Para saber qué cambia cuando un programa no tiene
-    pruebas hace falta compararlo con el grupo B, procesado de la misma forma.</p>""")
+    <p class="nota">Esta ejecución incluye solo proyectos del grupo A. Determinar el efecto de la ausencia de
+    pruebas requiere contrastarlos con proyectos del grupo B procesados con el mismo procedimiento.</p>""")
     if a:
-        partes.append("""
-    <p class="nota"><strong>Por qué el grupo A no se compara con Meta:</strong> si un programa no tiene ninguna
-    prueba, casi cualquier prueba que funcione «revisa algo nuevo», así que el control 3 se aprueba casi solo. Meta
-    trabajó con programas que ya tenían pruebas; comparar su 25% con el grupo A mezclaría dos situaciones distintas.</p>""")
+        partes.append(f"""
+    <p class="nota"><strong>Por qué el grupo A no se contrasta con el estudio de referencia:</strong> cuando un proyecto
+    no tiene ninguna prueba, prácticamente cualquier prueba que compile y sea estable incrementa la cobertura, por lo
+    que el criterio 3 deja de filtrar. {REFERENCIA} trabajaron sobre proyectos con pruebas preexistentes; comparar su
+    25 % con el grupo A contrastaría dos condiciones distintas.</p>""")
     n = len(con_datos)
     return f"""
   <section id="comparacion">
     <h2>4. Comparaciones</h2>
     {''.join(partes)}
-    <p class="nota">Los porcentajes son sobre todas las pruebas que escribió la IA en cada programa (salvo la fila de
-    «comparan el resultado», que es sobre las aprobadas). Se usa el programa del medio (mediana).
-    {'Con tan pocos programas esto es una primera mirada, no una conclusión: ' if n < 10 else ''}la comparación con
-    prueba estadística (Wilcoxon y Mann-Whitney) se hace sobre el experimento completo.</p>
+    <p class="nota">Los porcentajes se calculan sobre el total de pruebas generadas en cada proyecto, salvo la
+    verificación significativa, que se calcula sobre las pruebas aceptadas. Para cada grupo se informa la mediana
+    entre proyectos.
+    {'Con este número de proyectos, los valores constituyen una observación preliminar y no permiten conclusiones: ' if n < 10 else ''}el
+    contraste estadístico (pruebas de Wilcoxon y de Mann-Whitney) se realizará sobre el conjunto completo del
+    experimento.</p>
   </section>"""
 
 
@@ -474,7 +493,6 @@ def _ejemplos(repos):
         candidatas = [p for p in todas if p["categoria"] == cat]
         if not candidatas:
             continue
-        # Preferir una que compruebe algo y que no repita el código de otro ejemplo
         orden = sorted(candidatas, key=lambda p: (_limpio(p["codigo_prueba"]) in mostrados, -p["tiene_asercion"]))
         p = orden[0]
         mostrados.add(_limpio(p["codigo_prueba"]))
@@ -484,7 +502,7 @@ def _ejemplos(repos):
         if cat in ("falla", "no_compila"):
             lineas = [l.strip() for l in (p["salida_error"] or "").splitlines() if "Error" in l or "assert" in l]
             if lineas:
-                motivo = f'<p class="motivo">El error que mostró Python: <code>{_e(lineas[-1][:160])}</code></p>'
+                motivo = f'<p class="motivo">Error informado por Python: <code>{_e(lineas[-1][:160])}</code></p>'
         bloques.append(f"""
       <figure class="ejemplo cat-{cat}">
         <figcaption><strong>{_e(titulo)}</strong> <span class="cuantas">{len(candidatas)} en total</span>
@@ -497,18 +515,18 @@ def _ejemplos(repos):
         p = trampa
         extra = f"""
       <figure class="ejemplo cat-trampa">
-        <figcaption><strong>Aprobada, pero no compara nada importante</strong>
+        <figcaption><strong>Aceptada, sin verificación significativa</strong>
           <span class="cuantas">{len(sin_asercion)} en total</span>
-          <span class="explica">Superó los tres controles, pero solo pone a andar el código y nunca compara el
-          resultado con lo esperado: si la función estuviera rota, esta prueba igual daría bien. Por eso el estudio
-          cuenta aparte las aprobadas que de verdad comparan algo.</span></figcaption>
+          <span class="explica">Cumple los tres criterios, pero se limita a ejecutar el código sin contrastar el
+          resultado con un valor esperado: si la función tuviera un defecto, la prueba igualmente pasaría. Por esta
+          razón el estudio informa por separado las pruebas aceptadas con verificación significativa.</span></figcaption>
         <pre><code>{_e(_limpio(p['codigo_prueba']))}</code></pre>
       </figure>"""
     return f"""
   <section id="ejemplos">
-    <h2>7. Ejemplos reales de esta ejecución</h2>
-    <p>Una prueba de cada tipo, tal como la escribió la IA. No hace falta leer el código: el título y la
-    explicación de cada una dicen por qué se aprobó o se descartó.</p>
+    <h2>7. Ejemplos de pruebas generadas en esta ejecución</h2>
+    <p>Se presenta una prueba de cada categoría, tal como la generó el modelo. El título y la descripción de cada
+    ejemplo indican el motivo de su aceptación o descarte; no es necesario leer el código.</p>
     {''.join(bloques)}{extra}
   </section>"""
 
@@ -518,7 +536,7 @@ def _limpio(codigo):
     return textwrap.dedent((codigo or "").strip("\n")).strip()
 
 
-def _detalles_tecnicos(ej, cfg, repos):
+def _detalles_tecnicos(ej, cfg, repos, almacen):
     h = cfg.get("herramienta", {})
     tokens = sum((c["tokens_entrada"] or 0) + (c["tokens_salida"] or 0) for r in repos for c in r["corridas"])
     costo = sum(c["costo_usd"] or 0 for r in repos for c in r["corridas"])
@@ -530,23 +548,23 @@ def _detalles_tecnicos(ej, cfg, repos):
     filas = [
         ("Modelo de lenguaje", ej["modelo"]),
         ("Herramienta evaluada", f"Qodo Cover (cover-agent), commit {str(h.get('qodo_cover_commit', ''))[:10]}"),
-        ("Rondas por archivo", h.get("max_iteraciones")),
-        ("Razonamiento interno de la IA", h.get("razonamiento") or "el que trae el modelo por defecto"),
-        ("Explicación de pruebas fallidas", "con la salida de pytest (sin consultar a la IA)"
-         if h.get("analisis_fallas", "ia") == "local" else "pedida a la IA (comportamiento original)"),
-        ("Repeticiones por prueba (estabilidad)", h.get("ejecuciones_por_prueba")),
+        ("Iteraciones por módulo", h.get("max_iteraciones")),
+        ("Nivel de razonamiento del modelo", h.get("razonamiento") or "valor por defecto del modelo"),
+        ("Diagnóstico de pruebas fallidas", "a partir de la salida de pytest, sin consultar al modelo"
+         if h.get("analisis_fallas", "ia") == "local" else "solicitado al modelo (comportamiento original)"),
+        ("Ejecuciones por prueba (estabilidad)", h.get("ejecuciones_por_prueba")),
         ("Corridas por proyecto", cfg.get("experimento", {}).get("corridas_por_repo")),
-        ("Tiempo total de proceso", f"{_n(dur / 60)} minutos"),
+        ("Tiempo total de procesamiento", f"{_n(dur / 60)} minutos"),
         ("Consumo del modelo", f"{tokens:,} tokens".replace(",", ".")),
         ("Costo estimado", f"US$ {_n(costo, 4)}"),
-        ("Entorno", "sin contenedor (modo depuración)" if ej["imagen_docker"] == "sin-docker"
+        ("Entorno", "sin contenedor (modo de depuración)" if ej["imagen_docker"] == "sin-docker"
                     else f"contenedor Docker {str(ej['imagen_docker'])[:19]}"),
         ("Máquina", f"{maquina.get('sistema', '')}, Python {maquina.get('python', '')}"),
         ("Versión del pipeline", ej["commit_pipeline"]),
         ("Huella de la configuración", ej["huella_config"]),
     ]
     tabla = "".join(f"<tr><th scope='row'>{_e(a)}</th><td>{_e(b)}</td></tr>" for a, b in filas)
-    uso = consumo_por_tipo(_ALMACEN[0], ej["id"]) if _ALMACEN else {}
+    uso = consumo_por_tipo(almacen, ej["id"])
     tabla_uso = ""
     if uso:
         filas_uso = "".join(
@@ -555,15 +573,15 @@ def _detalles_tecnicos(ej, cfg, repos):
             f"<td class='num'>{d.get('razonamiento', 0):,}</td></tr>".replace(",", ".")
             for t, d in sorted(uso.items(), key=lambda x: -(x[1].get('entrada', 0) + x[1].get('salida', 0))))
         tabla_uso = f"""
-      <p>Consumo de la IA según para qué se la consultó (los tokens de razonamiento están incluidos en la salida):</p>
-      <div class="tabla-scroll"><table class="tecnica"><thead><tr><th>Para qué</th><th class="num">Llamadas</th>
+      <p>Consumo del modelo según el tipo de solicitud (los tokens de razonamiento están incluidos en la salida):</p>
+      <div class="tabla-scroll"><table class="tecnica"><thead><tr><th>Tipo de solicitud</th><th class="num">Llamadas</th>
         <th class="num">Entrada</th><th class="num">Salida</th><th class="num">Razonamiento</th></tr></thead>
         <tbody>{filas_uso}</tbody></table></div>"""
     return f"""
   <section id="tecnico">
     <details>
       <summary>Detalles técnicos de la ejecución</summary>
-      <p>Lo necesario para que otra persona repita exactamente esta ejecución (reproducibilidad, RNF-01).</p>
+      <p>Información necesaria para repetir exactamente esta ejecución (reproducibilidad, RNF-01).</p>
       <div class="tabla-scroll"><table class="tecnica">{tabla}</table></div>{tabla_uso}
     </details>
   </section>"""
@@ -572,16 +590,12 @@ def _detalles_tecnicos(ej, cfg, repos):
 # -----------------------------------------------------------------------------------------------
 # Página completa
 # -----------------------------------------------------------------------------------------------
-_ALMACEN = []
-
-
 def generar_html(almacen, ejecucion_id=None, destino=None):
     if ejecucion_id is None:
         fila = almacen.consultar("SELECT MAX(id) AS id FROM ejecuciones")
         ejecucion_id = fila[0]["id"] if fila else None
     if not ejecucion_id:
         return None
-    _ALMACEN[:] = [almacen]
     ej, repos = _datos(almacen, ejecucion_id)
     try:
         cfg = json.loads(ej["config_json"] or "{}")
@@ -591,51 +605,53 @@ def generar_html(almacen, ejecucion_id=None, destino=None):
     escritas = sum(r["conteo"]["escritas"] for r in repos)
     aprobadas = sum(r["conteo"]["aporta"] for r in repos)
     n_repos = len(repos)
-    nombre_exp = {"prueba": "Prueba rápida", "piloto": "Prueba piloto"}.get(ej["experimento"], ej["experimento"])
-    nombres = ", ".join(r["nombre"] for r in repos)
+    nombre_exp = {"prueba": "Prueba de funcionamiento", "piloto": "Prueba piloto"}.get(ej["experimento"], ej["experimento"])
     tarjetas = ""
     for g in ("A", "B"):
         del_grupo = [r for r in repos if r["grupo"] == g]
         if del_grupo:
-            corto, titulo, ayuda = GRUPOS[g]
+            corto, titulo, _ = GRUPOS[g]
             tarjetas += (f'<h3 class="titulo-grupo"><span class="etiqueta-grupo g{g}">{corto}</span> {_e(titulo)}</h3>'
                          + "".join(_tarjeta_repo(r, n_corridas) for r in del_grupo))
     n_a = sum(1 for r in repos if r["grupo"] == "A")
     n_b = sum(1 for r in repos if r["grupo"] == "B")
     partes_grupos = []
     if n_a:
-        partes_grupos.append(f"{n_a} que no tenía{'n' if n_a != 1 else ''} ninguna (grupo A)")
+        partes_grupos.append(f"{n_a} sin pruebas preexistentes (grupo A)")
     if n_b:
-        partes_grupos.append(f"{n_b} que ya tenía{'n' if n_b != 1 else ''} pruebas de sus autores (grupo B)")
-    sem_vals = [r["cob_sem"] for r in repos if r.get("cob_sem") is not None and r.get("cob_fin") is not None]
+        partes_grupos.append(f"{n_b} con una suite de pruebas preexistente (grupo B)")
     aporte_vals = [r["cob_fin"] - r["cob_sem"] for r in repos
                    if r.get("cob_sem") is not None and r.get("cob_fin") is not None]
-    linea_aporte = (f"<li>La parte de cada programa revisada gracias a la IA subió entre "
-                    f"<strong>{_n(min(aporte_vals), 0)} y {_n(max(aporte_vals), 0)} puntos</strong> "
-                    f"(sin contar lo que ya estaba revisado antes de la IA).</li>" if aporte_vals else "")
+    linea_aporte = (f"<li>El incremento de cobertura atribuible a las pruebas aceptadas osciló entre "
+                    f"<strong>{_n(min(aporte_vals), 1)} y {_n(max(aporte_vals), 1)} puntos porcentuales</strong> por "
+                    f"proyecto, descontada la cobertura previa a la generación.</li>" if aporte_vals else "")
     lineas_grupo = ""
     for g in ("A", "B"):
         c = _conteo([r for r in repos if r["grupo"] == g])
         if c["escritas"]:
-            lineas_grupo += (f"<li>{GRUPOS[g][0]} ({GRUPOS[g][1].lower()}): la IA escribió <strong>{c['escritas']}"
-                             f"</strong> pruebas y <strong>{c['aporta']}</strong> quedaron aprobadas.</li>")
+            lineas_grupo += (f"<li>{GRUPOS[g][0]} ({GRUPOS[g][1].lower()}): <strong>{c['escritas']}</strong> pruebas "
+                             f"generadas, <strong>{c['aporta']}</strong> aceptadas "
+                             f"({_n(_pct(c['aporta'], c['escritas']), 0)} %).</li>")
+    modelo = ej["modelo"].split("/")[-1]
 
     pagina = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Informe — {_e(nombre_exp)} (ejecución {ej['id']})</title>
+<title>Informe de ejecución — {_e(nombre_exp)} (ejecución {ej['id']})</title>
 <style>{CSS}</style>
 </head>
 <body>
 <main>
   <header>
-    <p class="contexto">Tesis FP-UNA · Generación automática de pruebas con IA según las pruebas que ya tiene el programa</p>
+    <p class="contexto">Tesis FP-UNA · Evaluación empírica de la generación automatizada de pruebas unitarias con
+      modelos de lenguaje en función de la cobertura de pruebas preexistente</p>
     <h1>{_e(nombre_exp)}</h1>
-    <p class="entrada">Le pedimos a una IA ({_e(ej['modelo'].split('/')[-1])}) que escriba pruebas para
-      {n_repos} programa{'s' if n_repos != 1 else ''} real{'es' if n_repos != 1 else ''}: {' y '.join(partes_grupos)}.
-      Medimos cuántas de esas pruebas valen la pena y si eso cambia según el programa ya tenga pruebas o no.</p>
+    <p class="entrada">Se solicitó al modelo de lenguaje <strong>{_e(modelo)}</strong>, a través de la herramienta
+      Qodo Cover, la generación de pruebas unitarias para {n_repos} proyecto{'s' if n_repos != 1 else ''} de código
+      abierto: {' y '.join(partes_grupos)}. El informe presenta la proporción de pruebas generadas que supera cada
+      criterio de filtrado y compara los resultados entre ambas condiciones y con el estudio de referencia.</p>
     <p class="datos-ejecucion">Ejecución {ej['id']} · {_e(ej['inicio'])}</p>
   </header>
   {_grafico_controles(repos)}
@@ -645,65 +661,72 @@ def generar_html(almacen, ejecucion_id=None, destino=None):
   {_comparacion(repos)}
 
   <section id="resumen" class="recuadro">
-    <h2>En resumen</h2>
+    <h2>Síntesis</h2>
     <ul>
-      <li>La IA escribió <strong>{escritas}</strong> pruebas en total y <strong>{aprobadas}</strong> quedaron
-        aprobadas (superaron los tres controles).</li>
+      <li>El modelo generó <strong>{escritas}</strong> pruebas en total, de las cuales <strong>{aprobadas}</strong>
+        cumplieron los tres criterios de filtrado y fueron aceptadas.</li>
       {lineas_grupo}
       {linea_aporte}
-      <li>Todo el proceso fue automático: elegir los programas, prepararlos, pedirle las pruebas a la IA,
-        aplicar los controles y medir.</li>
+      <li>El proceso completo —selección de proyectos, preparación de entornos, generación, filtrado y medición—
+        se ejecutó de forma automatizada.</li>
     </ul>
   </section>
 
   <section id="proyectos">
-    <h2>5. Programa por programa</h2>
-    <p class="leyenda">Los mismos controles del gráfico 1, para cada programa por separado. En el grupo B, la línea
-      punteada (<span class="meta-muestra" aria-hidden="true"></span>) marca dónde quedó Meta.</p>
+    <h2>5. Resultados por proyecto</h2>
+    <p class="leyenda">Los mismos criterios del gráfico 1, para cada proyecto. En el grupo B, la línea punteada
+      (<span class="meta-muestra" aria-hidden="true"></span>) señala el valor del estudio de referencia.</p>
     {tarjetas}
   </section>
 
   <section id="pasos">
-    <h2>6. Cómo se obtuvieron estos números</h2>
+    <h2>6. Procedimiento</h2>
     <ol class="pasos">
-      <li><strong>Eligió los programas</strong> y verificó que cumplan los criterios del estudio: chicos, instalables
-        de forma automática y, según el grupo, sin pruebas (A) o con pruebas de sus autores que funcionan (B).</li>
-      <li><strong>Los preparó</strong> cada uno en un entorno aislado (un contenedor), instalando lo que necesitan.</li>
-      <li><strong>Midió la parte revisada al empezar</strong>. En el grupo A: 0%, y además cuánto se revisa solo con
-        abrir los archivos. En el grupo B: lo que ya revisaban sus pruebas. Eso es la base: no se le atribuye a la IA.</li>
-      <li><strong>Le pidió pruebas a la IA</strong>, archivo por archivo, a través de Qodo Cover: la versión
-        abierta de la herramienta que usó Meta. En el grupo B, la IA agrega pruebas al archivo de pruebas real.</li>
-      <li><strong>Aplicó los tres controles</strong> a cada prueba y midió la parte revisada al final. En el grupo B,
-        una prueba solo se aprueba si revisa algo que ninguna de las pruebas de los autores revisaba.</li>
+      <li><strong>Selección.</strong> Se verificó que cada proyecto cumpla los criterios de inclusión: tamaño,
+        instalación automatizada, licencia, actividad y, según el grupo, ausencia de pruebas (A) o una suite de
+        pruebas preexistente que pasa (B).</li>
+      <li><strong>Preparación.</strong> Cada proyecto se instaló en un entorno aislado (contenedor) con sus
+        dependencias.</li>
+      <li><strong>Cobertura inicial.</strong> En el grupo A se midió la cobertura nula de partida y la atribuible a la
+        importación de los módulos; en el grupo B, la cobertura de la suite preexistente. Ese valor es la línea base,
+        que no se atribuye al modelo.</li>
+      <li><strong>Generación.</strong> Qodo Cover, implementación de código abierto del enfoque de {REFERENCIA},
+        solicitó al modelo pruebas para cada módulo seleccionado. En el grupo B, las pruebas se incorporan al
+        archivo de pruebas existente del módulo.</li>
+      <li><strong>Filtrado y medición.</strong> Cada prueba se sometió a los tres criterios y se midió la cobertura
+        final. En el grupo B, una prueba solo se acepta si ejecuta líneas que ninguna prueba de los desarrolladores
+        ejecutaba.</li>
     </ol>
   </section>
   {_ejemplos(repos)}
 
   <section id="glosario">
-    <h2>8. Palabras que aparecen en el informe</h2>
+    <h2>8. Glosario</h2>
     <dl>
-      <dt>Prueba (prueba unitaria)</dt><dd>Un programita que verifica que una parte del programa hace lo que
-        debe. Por ejemplo: le da 2 y 3 a una función que suma y comprueba que devuelva 5.</dd>
-      <dt>Aprobada</dt><dd>Prueba que superó los tres controles (arranca, da bien las 5 veces y revisa algo
-        nuevo). Es la única que se guarda.</dd>
-      <dt>Parte revisada (cobertura)</dt><dd>Qué porcentaje del programa se pone a andar cuando corren las
-        pruebas. Lo que nunca se pone a andar, nadie lo revisó.</dd>
-      <dt>Abrir los archivos (importar)</dt><dd>Lo que hace Python antes de usar un archivo: lo lee de arriba
-        abajo. Solo con eso ya «recorre» una parte, y por eso se mide aparte.</dd>
-      <dt>Grupo A y grupo B</dt><dd>Grupo A: programas sin ninguna prueba. Grupo B: programas que ya tenían
-        pruebas escritas por sus autores. Se procesan exactamente igual; compararlos muestra qué cambia cuando un
-        programa no tiene pruebas.</dd>
-      <dt>Meta</dt><dd>La empresa de Facebook e Instagram. En 2024 publicó los resultados de su herramienta
-        de pruebas con IA sobre programas que ya tenían pruebas. El grupo B repite esa medición; el grupo A la
-        extiende a programas sin pruebas, la situación de muchos equipos pequeños.</dd>
-      <dt>Compara con lo esperado</dt><dd>Una prueba que, además de poner a andar el código, verifica que el
-        resultado sea el correcto (por ejemplo, que la suma de 2 y 3 dé 5). Una que solo comprueba «que algo
-        devolvió algo» no cuenta.</dd>
-      <dt>Qodo Cover</dt><dd>La herramienta de código abierto que reproduce el método de Meta. Es la que le pide
-        las pruebas a la IA y aplica los controles.</dd>
+      <dt>Prueba unitaria</dt><dd>Programa breve que verifica automáticamente que una parte del código funciona como
+        corresponde; por ejemplo, que una función de suma devuelva 5 al recibir 2 y 3.</dd>
+      <dt>Prueba aceptada</dt><dd>Prueba generada que cumple los tres criterios de filtrado: compila, es estable en 5
+        ejecuciones e incrementa la cobertura. Es la única que se incorpora al proyecto.</dd>
+      <dt>Cobertura de código</dt><dd>Porcentaje de líneas del código fuente que se ejecutan al correr las pruebas.
+        Las líneas no ejecutadas no están verificadas por ninguna prueba.</dd>
+      <dt>Cobertura atribuible a la importación</dt><dd>Al importar un módulo, Python ejecuta sus definiciones de
+        funciones, clases y constantes; esas líneas cuentan como cubiertas aunque no exista ninguna prueba. Por eso
+        se miden por separado y no se atribuyen al modelo.</dd>
+      <dt>Verificación significativa</dt><dd>Comprobación que contrasta el resultado con un valor esperado o verifica
+        que se produzca una excepción. Una prueba que solo comprueba que «se obtuvo algún resultado» no la contiene.
+        Es el indicador de la hipótesis H2.</dd>
+      <dt>Grupo A y grupo B</dt><dd>Grupo A: proyectos sin pruebas preexistentes. Grupo B: proyectos con una suite de
+        pruebas escrita por sus desarrolladores. Ambos se procesan con el mismo procedimiento; la comparación entre
+        ellos permite aislar el efecto de la ausencia de pruebas.</dd>
+      <dt>Estudio de referencia</dt><dd>{REFERENCIA}, publicado en FSE 2024: aplicó el enfoque de generación con
+        filtrado (TestGen-LLM) sobre productos de Meta que ya contaban con pruebas. El grupo B replica esa condición.</dd>
+      <dt>Qodo Cover</dt><dd>Implementación de código abierto del enfoque de {REFERENCIA}. Solicita las pruebas al
+        modelo y aplica los criterios de filtrado.</dd>
+      <dt>Modelo de lenguaje (LLM)</dt><dd>Sistema de inteligencia artificial entrenado con grandes volúmenes de texto
+        y código, capaz de generar código a partir de una instrucción.</dd>
     </dl>
   </section>
-  {_detalles_tecnicos(ej, cfg, repos)}
+  {_detalles_tecnicos(ej, cfg, repos, almacen)}
 </main>
 </body>
 </html>

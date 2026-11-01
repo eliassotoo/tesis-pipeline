@@ -396,7 +396,7 @@ def generar_para_modulo(orden, repo, salida, archivo, modulo, archivo_prueba=Non
     ]
     if llm.get("api_base"):
         cmd += ["--api-base", llm["api_base"]]
-    paso(f"   Archivo {archivo.relative_to(repo)}")
+    paso(f"   Módulo {archivo.relative_to(repo)}")
     log(f"M4 generando pruebas para {modulo} con {llm['modelo']}")
     log("comando: " + " ".join(shlex.quote(c) for c in cmd[:5]) + " ...")
     inicio = time.time()
@@ -420,12 +420,12 @@ def generar_para_modulo(orden, repo, salida, archivo, modulo, archivo_prueba=Non
         # línea "Reached ..." al terminar. Por eso cada ronda se muestra como "arranca con".
         m = re.search(r"Current Coverage: ([\d.]+)%", linea)
         if m and ronda and not DETALLE:
-            paso(f"      ronda {ronda}: arranca con {coma(float(m.group(1)))}% del archivo revisado")
+            paso(f"      iteración {ronda}: cobertura del módulo al inicio {coma(float(m.group(1)))}%")
             ronda = None
             continue
         if m and "Reached" in linea and not DETALLE:
-            meta = "llegó a la meta" if "above target" in linea else "usó todas las rondas sin llegar a la meta"
-            paso(f"      resultado final: {coma(float(m.group(1)))}% del archivo revisado ({meta})")
+            meta = "alcanzó el objetivo" if "above target" in linea else "completó las iteraciones sin alcanzar el objetivo"
+            paso(f"      cobertura final del módulo: {coma(float(m.group(1)))}% ({meta})")
     tipo_error_llm = error_del_llm(texto, codigo)
     if tipo_error_llm:
         paso(f"      ERROR DE LA IA ({tipo_error_llm}): el modelo no respondió; este archivo no es un dato válido")
@@ -498,11 +498,11 @@ def main():
         return guardar("error_entorno", error="Falta tesis_llm en el entorno de Qodo Cover (docker/parche_qodo.py)")
 
     # M2
-    paso("Paso 2/5  Preparando el proyecto: instalando lo que necesita para funcionar...")
+    paso("Paso 2/5  Preparación: instalación de dependencias en el entorno aislado...")
     ok, error = preparar(orden, repo)
     if not ok:
-        paso("   No se pudo preparar: falló la instalación de lo que necesita.")
-        paso("   Queda registrado y se sigue con el siguiente proyecto.")
+        paso("   No fue posible instalar sus dependencias.")
+        paso("   Se registra el descarte y se continúa con el proyecto siguiente.")
         return guardar("no_preparable", error=error)
 
     # M3 inicial
@@ -513,14 +513,14 @@ def main():
     resultado["cobertura_inicial"] = cov0
     log(f"M3 cobertura inicial: {cov0}%  (código pytest {codigo}, {duracion_suite:.1f} s)")
     if grupo == "B":
-        paso(f"Paso 3/5  Midiendo cuánto código revisan sus pruebas actuales: {coma(cov0)}%"
-             + (f"  (su suite tarda {coma(duracion_suite, 1)} s)" if cov0 is not None else ""))
+        paso(f"Paso 3/5  Cobertura inicial de la suite preexistente: {coma(cov0)}%"
+             + (f"  (duración de la suite: {coma(duracion_suite, 1)} s)" if cov0 is not None else ""))
         if codigo != 0:
-            paso("   Sus pruebas actuales no pasan en este entorno: no se puede usar como grupo B.")
+            paso("   La suite preexistente no pasa en el entorno aislado: el proyecto no es apto para el grupo B.")
             return guardar("suite_falla", error=texto[-3000:])
     else:
-        paso(f"Paso 3/5  Midiendo cuánto código revisan sus pruebas actuales: {coma(cov0)}%"
-             + ("  (lo esperado: el proyecto no tiene pruebas)" if cov0 is not None and cov0 < 10 else ""))
+        paso(f"Paso 3/5  Cobertura inicial: {coma(cov0)}%"
+             + ("  (esperada: el proyecto no tiene pruebas)" if cov0 is not None and cov0 < 10 else ""))
     if cov0 is None:
         return guardar("error_cobertura_inicial", error=texto[-3000:])
     if grupo == "A" and cov0 > crit.get("cobertura_a_max", 10):
@@ -538,12 +538,12 @@ def main():
                                  cobertura_por_archivo(salida / "cobertura_inicial.xml", repo),
                                  orden.get("archivos_prueba"))
         if not pares:
-            paso("   Ningún archivo tiene pruebas propias que extender y algo sin cubrir: no hay nada que hacer.")
+            paso("   Ningún módulo tiene un archivo de pruebas preexistente y líneas sin cubrir.")
             return guardar("sin_modulos", error="Ningún módulo con archivo de prueba preexistente y cobertura < 100%")
         # Línea base del grupo B: lo que ya cubre la suite preexistente
         resultado["cobertura_base"] = cov0
-        paso(f"          Esa es la base: la IA solo suma si revisa algo que sus {len(archivos_de_prueba(repo))} "
-             "archivos de prueba no revisaban")
+        paso("          Línea base: una prueba generada solo se acepta si cubre líneas que la suite "
+             f"preexistente ({len(archivos_de_prueba(repo))} archivos de prueba) no cubre")
     else:
         pares = [(a, None) for a in elegir_modulos(repo, orden["fuente"], h["max_modulos"])]
         # Línea base CON semillas (hallazgo del piloto): importar un módulo ya ejecuta su código de nivel
@@ -556,13 +556,13 @@ def main():
                                                  objetivo=CARPETA_PRUEBAS, timeout_prueba=h["timeout_prueba_seg"])
         resultado["cobertura_semillas"] = cov_sem
         resultado["cobertura_base"] = cov_sem
-        paso(f"          Solo con importar los archivos elegidos (sin ninguna prueba) ya da {coma(cov_sem)}%: "
-             "esa es la base para medir lo que aporta la IA")
+        paso(f"          Cobertura atribuible a la importación de los módulos: {coma(cov_sem)}% "
+             "(línea base, no se atribuye al modelo)")
         log(f"cobertura con semillas: {cov_sem}%  (código pytest {codigo})")
     log("Módulos seleccionados: " + ", ".join(f"{a.relative_to(repo)}" + (f" -> {t}" if t else "") for a, t in pares))
 
-    paso(f"Paso 4/5  Pidiéndole pruebas a la IA a través de Qodo Cover, archivo por archivo "
-         f"({len(pares)} archivo{'s' if len(pares) != 1 else ''})")
+    paso(f"Paso 4/5  Generación de pruebas con Qodo Cover y el modelo de lenguaje "
+         f"({len(pares)} módulo{'s' if len(pares) != 1 else ''})")
 
     costo = orden.get("costo", {})
     gastado = 0.0
@@ -576,12 +576,12 @@ def main():
             break
         modulo = nombre_modulo(repo, archivo)
         if archivo_prueba:
-            paso(f"   (extiende su archivo de prueba {archivo_prueba})")
+            paso(f"   (amplía su archivo de pruebas {archivo_prueba})")
         datos = generar_para_modulo(orden, repo, salida, archivo, modulo, archivo_prueba, duracion_suite)
         datos["costo_usd"] = costo_estimado(datos, costo)
         gastado += datos["costo_usd"]
         resultado["modulos"].append(datos)
-        paso(f"      la IA escribió {len(datos['intentos'])} pruebas para este archivo "
+        paso(f"      pruebas generadas: {len(datos['intentos'])} "
              f"({datos['tokens_entrada'] + datos['tokens_salida']:,} tokens, US$ {coma(datos['costo_usd'], 3)})".replace(",", "."))
         log(f"{modulo}: {len(datos['intentos'])} pruebas candidatas, {datos['tokens_entrada']}+{datos['tokens_salida']} "
             f"tokens (razonamiento {datos.get('tokens_razonamiento', 0)}), costo estimado {datos['costo_usd']} USD")
@@ -595,14 +595,14 @@ def main():
 
     if errores_llm:
         resultado["error_llm_tipo"] = errores_llm[-1].rsplit(": ", 1)[1]
-        paso("Paso 5/5  No se mide la cobertura final: la IA falló y esta corrida hay que repetirla")
+        paso("Paso 5/5  No se mide la cobertura final: el modelo no respondió y la corrida debe repetirse")
         return guardar("error_llm", error="La IA no respondió en: " + "; ".join(errores_llm))
 
     # Cobertura final: grupo A, las pruebas aprobadas; grupo B, toda la suite (preexistente + aprobadas)
     cov1, codigo, texto = medir_cobertura(repo, orden["fuente"], salida / "cobertura_final.xml",
                                           objetivo=CARPETA_PRUEBAS if grupo == "A" else "",
                                           timeout_prueba=h["timeout_prueba_seg"], tolerar_vacio=(grupo == "A"))
-    paso(f"Paso 5/5  Midiendo cuánto código quedó revisado con las pruebas aprobadas: {coma(cov1)}%")
+    paso(f"Paso 5/5  Cobertura final con las pruebas aceptadas: {coma(cov1)}%")
     resultado["cobertura_final"] = cov1
     if grupo == "A":
         shutil.copytree(repo / CARPETA_PRUEBAS, salida / CARPETA_PRUEBAS, dirs_exist_ok=True)

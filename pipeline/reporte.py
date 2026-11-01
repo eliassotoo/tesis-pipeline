@@ -21,15 +21,16 @@ from pathlib import Path
 REFERENCIA_META = {"compila": 75.0, "pasa": 57.0, "aporta": 25.0}
 METRICAS = ("compila", "pasa", "aporta", "significativa")
 NOMBRE_GRUPO = {"A": "Grupo A · sin pruebas preexistentes", "B": "Grupo B · con suite de pruebas preexistente"}
-NOMBRE_METRICA = {"compila": "Compila (control 1)", "pasa": "Pasa siempre (control 2)",
-                  "aporta": "Aporta cobertura (control 3)", "significativa": "Aprobadas que verifican algo (H2)"}
+NOMBRE_METRICA = {"compila": "Compilan (criterio 1)", "pasa": "Estables (criterio 2)",
+                  "aporta": "Incrementan la cobertura (criterio 3)",
+                  "significativa": "Aceptadas con verificación significativa (H2)"}
 # Hipótesis del anteproyecto (sección 2.1): el grupo A frente al grupo B
 HIPOTESIS_AB = {"compila": ("menor", "H1"), "pasa": ("menor", "H1"), "significativa": ("menor", "H2")}
 TIPOS_LLAMADA = {
-    "generate_tests": "Escribir pruebas",
-    "analyze_test_failure": "Explicar por qué falló una prueba",
-    "analyze_suite_test_headers_indentation": "Analizar el archivo de pruebas (sangría)",
-    "analyze_test_insert_line": "Analizar el archivo de pruebas (dónde insertar)",
+    "generate_tests": "Generación de pruebas",
+    "analyze_test_failure": "Diagnóstico de pruebas fallidas",
+    "analyze_suite_test_headers_indentation": "Análisis del archivo de pruebas (sangría)",
+    "analyze_test_insert_line": "Análisis del archivo de pruebas (inserción)",
 }
 
 
@@ -164,27 +165,27 @@ def resumen(almacen, ejecucion_id=None, ruta_informe=None):
             if not n:
                 print("   No hubo pruebas para clasificar.")
                 continue
-            etapas = [("escritas por la IA", n), ("arrancan (control 1)", sum(x["compila"] for x in p)),
-                      ("dan bien las 5 veces (control 2)", sum(x["pasa"] for x in p)),
-                      ("APROBADAS (control 3)", sum(x["aporta"] for x in p))]
+            etapas = [("pruebas generadas", n), ("compilan (criterio 1)", sum(x["compila"] for x in p)),
+                      ("estables en 5 ejecuciones (criterio 2)", sum(x["pasa"] for x in p)),
+                      ("ACEPTADAS: incrementan cobertura (3)", sum(x["aporta"] for x in p))]
             for i, (texto, cant) in enumerate(etapas):
                 pct = "" if i == 0 else f"{_coma(100 * cant / n, 0):>5}%"
-                print(f"   {cant:>4}  {texto:<34}{pct}")
+                print(f"   {cant:>4}  {texto:<40}{pct}")
             if r["cob_fin"] is not None and r["cob_base"] is not None:
-                base = "solo importando" if g == "A" else "con sus pruebas preexistentes"
-                print(f"   Código revisado: {_coma(r['cob_base'])}% {base} -> {_coma(r['cob_fin'])}% con las de la IA "
-                      f"(aporte de la IA: {_coma(r['cob_fin'] - r['cob_base'])} puntos)")
+                base = "atribuible a la importación" if g == "A" else "de la suite preexistente"
+                print(f"   Cobertura: {_coma(r['cob_base'])}% {base} -> {_coma(r['cob_fin'])}% con las aceptadas "
+                      f"(incremento atribuible al modelo: {_coma(r['cob_fin'] - r['cob_base'])} p.p.)")
     grupos = resumen_grupos(repos)
     if "B" in grupos:
         b = grupos["B"]
-        print(f"\n{linea}\nGRUPO B FRENTE A META (misma condición: proyectos con pruebas)")
+        print(f"\n{linea}\nGRUPO B FRENTE AL ESTUDIO DE REFERENCIA (Alshahwan et al., 2024; misma condición)")
         for k in ("compila", "pasa", "aporta"):
-            print(f"   {NOMBRE_METRICA[k]:<34} B {_coma(b[k], 0):>4}%   Meta {REFERENCIA_META[k]:.0f}%")
+            print(f"   {NOMBRE_METRICA[k]:<46} B {_coma(b[k], 0):>4}%   Referencia {REFERENCIA_META[k]:.0f}%")
     if "A" in grupos and "B" in grupos:
         a, b = grupos["A"], grupos["B"]
-        print(f"\nGRUPO A FRENTE A GRUPO B (efecto de no tener pruebas)")
+        print(f"\nGRUPO A FRENTE A GRUPO B (efecto de la ausencia de pruebas preexistentes)")
         for k in ("compila", "pasa", "significativa"):
-            print(f"   {NOMBRE_METRICA[k]:<34} A {_coma(a[k], 0):>4}%   B {_coma(b[k], 0):>4}%")
+            print(f"   {NOMBRE_METRICA[k]:<46} A {_coma(a[k], 0):>4}%   B {_coma(b[k], 0):>4}%")
     elif "A" in grupos:
         print("\n(Esta ejecución no tiene proyectos del grupo B: no hay contra qué comparar el grupo A.)")
     total_usd = sum(c["costo_usd"] or 0 for c in almacen.consultar(

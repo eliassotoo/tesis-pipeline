@@ -259,21 +259,21 @@ def ejecutar(config: Path,
     n_a = sum(1 for r in cfg["repositorios"] if r["grupo"] == "A")
     n_b = len(cfg["repositorios"]) - n_a
     h = cfg["herramienta"]
-    typer.echo(f"IA: {cfg['llm']['modelo']}   ·   repositorios públicos de GitHub: {n_a} del grupo A (sin pruebas)"
-               f" y {n_b} del grupo B (con pruebas)")
-    typer.echo(f"Consumo: razonamiento '{h['razonamiento'] or 'el del modelo'}' · explicación de fallas "
-               f"{'local (sin IA)' if h['analisis_fallas'] == 'local' else 'con IA'} · hasta {h['max_modulos']} "
-               f"archivos por proyecto, {h['max_iteraciones']} rondas · tope US$ {cfg['limites']['limite_costo_repo_usd']} "
+    typer.echo(f"Modelo: {cfg['llm']['modelo']}   ·   repositorios públicos de GitHub: {n_a} del grupo A "
+               f"(sin pruebas preexistentes) y {n_b} del grupo B (con suite preexistente)")
+    typer.echo(f"Parámetros: razonamiento '{h['razonamiento'] or 'por defecto'}' · diagnóstico de fallas "
+               f"{'local' if h['analisis_fallas'] == 'local' else 'con el modelo'} · hasta {h['max_modulos']} "
+               f"módulos por proyecto, {h['max_iteraciones']} iteraciones · tope US$ {cfg['limites']['limite_costo_repo_usd']} "
                "por proyecto")
     typer.echo("=" * 72)
     if chequeo:
-        typer.echo("\nChequeo previo  ¿la IA responde con esta clave y este modelo?")
+        typer.echo("\nVerificación previa: disponibilidad del modelo con la configuración del experimento")
         if _chequear_llm(cfg["llm"]["modelo"], cfg["llm"]["api_base"], sin_docker,
                          razonamiento=cfg["herramienta"]["razonamiento"]) != 0:
             typer.echo("\nNo se sigue: sin una IA que responda el experimento no produce datos. "
                        "Arreglalo y reintentá (o saltá este chequeo con --sin-chequeo).")
             raise typer.Exit(1)
-    typer.echo("\nPaso 1/5  Revisar qué proyectos cumplen los criterios del estudio")
+    typer.echo("\nPaso 1/5  Selección: verificación de los criterios de inclusión")
     aptos = seleccion.verificar(cfg, almacen, CACHE)
     if not aptos:
         typer.echo("Ningún repositorio cumple los criterios; no hay nada para ejecutar.")
