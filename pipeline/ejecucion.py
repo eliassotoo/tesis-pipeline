@@ -50,14 +50,18 @@ def info_maquina():
 def orden_de_trabajo(cfg, repo, corrida):
     return {
         "nombre": repo["nombre"],
+        "grupo": repo.get("grupo", "A"),
         "corrida": corrida,
         "fuente": repo["fuente"],
+        "archivos_prueba": repo.get("archivos_prueba") or {},
+        "criterios": {k: cfg["criterios"][k] for k in ("cobertura_a_max", "cobertura_b_min", "cobertura_b_max")},
         "instalacion_extra": repo.get("instalacion_extra", []),
         "herramienta": cfg["herramienta"],
         "llm": {"modelo": cfg["llm"]["modelo"], "api_base": cfg["llm"]["api_base"]},
         "costo": {
             "entrada_usd_por_millon": cfg["llm"]["entrada_usd_por_millon"],
             "salida_usd_por_millon": cfg["llm"]["salida_usd_por_millon"],
+            "entrada_cache_usd_por_millon": cfg["llm"].get("entrada_cache_usd_por_millon"),
             "limite_repo_usd": cfg["limites"]["limite_costo_repo_usd"],
         },
     }
@@ -112,6 +116,12 @@ def correr_sin_docker(cfg, repo, raiz_codigo, carpeta_corrida, corrida):
     if not qodo:
         raise SystemExit("Modo sin Docker: no se encontró 'cover-agent'. Instalalo con:\n"
                          "  pip install -r requirements-sin-docker.txt")
+    # Los mismos ajustes del estudio que tiene la imagen Docker (idempotente: si ya están, no cambia nada)
+    py_qodo = Path(qodo).parent / "python"
+    r = subprocess.run([str(py_qodo if py_qodo.exists() else sys.executable), str(RAIZ / "docker" / "parche_qodo.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("No se pudieron aplicar los ajustes del estudio a cover-agent:\n" + r.stdout + r.stderr)
     trabajo = Path(tempfile.mkdtemp(prefix=f"tesis-{repo['nombre']}-"))
     orden = json.loads((carpeta_corrida / "orden.json").read_text())
     orden.update(directorio_codigo=str(raiz_codigo), directorio_trabajo=str(trabajo / "repo"))
@@ -164,7 +174,8 @@ def ejecutar(cfg, almacen, aptos, sin_docker=False):
             (carpeta / "orden.json").write_text(
                 json.dumps(orden_de_trabajo(cfg, repo, corrida), indent=2, ensure_ascii=False))
             total_c = cfg["experimento"]["corridas_por_repo"]
-            print(f"\n>> Proyecto {repo['nombre']}" + (f"  (corrida {corrida} de {total_c})" if total_c > 1 else ""))
+            print(f"\n>> Proyecto {repo['nombre']}  (grupo {repo.get('grupo', 'A')})"
+                  + (f"  (corrida {corrida} de {total_c})" if total_c > 1 else ""))
             inicio = time.time()
             try:
                 codigo = (correr_sin_docker if sin_docker else correr_en_docker)(cfg, repo, raiz_codigo, carpeta, corrida)
@@ -181,8 +192,13 @@ def ejecutar(cfg, almacen, aptos, sin_docker=False):
                              "estado": "tiempo_agotado" if codigo == -999 else "error_contenedor",
                              "duracion_seg": round(time.time() - inicio, 1),
                              "error": f"El contenedor terminó con código {codigo} sin dejar resultado.json"}
+            resultado.setdefault("grupo", repo.get("grupo", "A"))
             corrida_id = almacen.registrar_corrida(ejecucion_id, exp, resultado, carpeta, cfg["llm"]["modelo"],
                                                    clasificacion.clasificar)
+            if resultado["estado"] in ("fuera_de_rango", "suite_falla", "sin_modulos"):
+                # Criterio que solo se puede verificar con el proyecto instalado: queda en la tabla de selección
+                almacen.registrar_criterio(exp, repo["nombre"], repo["url"], repo["commit"], "cobertura_inicial",
+                                           False, resultado.get("error", resultado["estado"]))
             cats = {f["categoria"]: f["n"] for f in almacen.consultar(
                 "SELECT categoria, COUNT(*) AS n FROM pruebas WHERE corrida_id=? GROUP BY categoria", (corrida_id,))}
             if cats:

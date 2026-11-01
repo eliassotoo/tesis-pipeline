@@ -1,6 +1,6 @@
 # =============================================================================
-# PRUEBA RÁPIDA — 1 repositorio público real de GitHub + Gemini.
-# Sirve para confirmar que todo el flujo funciona antes del piloto de 3 repositorios.
+# PRUEBA RÁPIDA — 1 repositorio del grupo A + 1 del grupo B, con Gemini.
+# Sirve para confirmar que todo el flujo funciona (y para mostrarlo en vivo) antes del piloto.
 #   python -m pipeline prueba
 # =============================================================================
 experimento:
@@ -17,15 +17,18 @@ llm:
 
 herramienta:
   qodo_cover_commit: adcf55baba40e8fbf8a84e68b70d08bef1e2b9c9
-  max_iteraciones: 3
+  max_iteraciones: 2
   cobertura_deseada: 100
   ejecuciones_por_prueba: 5
   timeout_prueba_seg: 30
-  max_modulos: 2                # solo 2 módulos: tarda unos 10 minutos y cuida el límite gratuito
+  max_modulos: 1                # 1 archivo por proyecto: la prueba rápida tarda pocos minutos y gasta centavos
   timeout_modulo_min: 20
+  # Consumo del modelo (docker/tesis_llm.py). Mismo valor para los dos grupos; queda registrado (RNF-05).
+  razonamiento: low             # «thinking» de Gemini acotado; "" = el que trae el modelo
+  analisis_fallas: local        # por qué falló una prueba: con la salida de pytest, sin consultar a la IA
 
 limites:
-  limite_costo_repo_usd: 1.00
+  limite_costo_repo_usd: 0.25
   tiempo_max_repo_min: 30
   cpus: 2
   memoria: 4g
@@ -34,9 +37,18 @@ criterios:
   lineas_min: 500
   lineas_max: 5000
   actividad_min_dias: 365
+  cobertura_a_max: 10
+  cobertura_b_min: 20
+  cobertura_b_max: 80
 
 repositorios:
   - nombre: pyckify
+    grupo: A                    # sin pruebas
     url: https://github.com/ReiDoBrega/pyckify.git
     commit: 7847a97e0866d85f6188c49eec3919e9b59cff63
     fuente: pyckify
+  - nombre: nb-autodoc
+    grupo: B                    # con pruebas: 31 pruebas que pasan, 63% de cobertura (verificado el 01/11/2026)
+    url: https://github.com/nonebot/nb-autodoc.git
+    commit: a49c34fb082ef4f47255eee58b14f876f5989498
+    fuente: nb_autodoc

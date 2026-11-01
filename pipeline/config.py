@@ -13,6 +13,13 @@ RAIZ = Path(__file__).resolve().parent.parent
 # Si Google lo renombra, `python -m pipeline modelos` lista los nombres vigentes para tu clave.
 MODELO_POR_DEFECTO = "gemini/gemini-3.6-flash"
 
+# Imagen del ejecutor. La etiqueta cambia cuando cambia el Dockerfile, para no usar una imagen vieja.
+IMAGEN_DOCKER = "tesis-pipeline-runner:h4-grupos"
+
+# Grupos del diseño experimental (sección 2.3 del anteproyecto)
+GRUPOS = {"A": "sin pruebas preexistentes", "B": "con suite de pruebas preexistente"}
+NIVELES_RAZONAMIENTO = ("", "minimal", "low", "medium", "high", "disable")
+
 # Proveedor (lo que va antes de la barra en el nombre del modelo) -> variable de entorno con la clave.
 CLAVES_POR_PROVEEDOR = {
     "gemini": "GEMINI_API_KEY",
@@ -35,10 +42,15 @@ POR_DEFECTO = {
         "timeout_prueba_seg": 30,
         "max_modulos": 5,
         "timeout_modulo_min": 20,
+        # Ajustes de consumo (docker/tesis_llm.py). Se registran con cada ejecución (RNF-05).
+        "razonamiento": "",          # nivel de «thinking» del modelo: minimal|low|medium|high|disable; "" = el del modelo
+        "analisis_fallas": "local",  # local = explicar la falla con la salida de pytest; ia = pedírsela al modelo
     },
     "limites": {"limite_costo_repo_usd": 1.0, "tiempo_max_repo_min": 60, "cpus": 2, "memoria": "4g"},
-    "criterios": {"lineas_min": 500, "lineas_max": 5000, "actividad_min_dias": 365},
-    "docker": {"imagen": "tesis-pipeline-runner:h4"},
+    "criterios": {"lineas_min": 500, "lineas_max": 5000, "actividad_min_dias": 365,
+                  # Cobertura inicial exigida a cada grupo (sección 2.3 del anteproyecto; umbrales tentativos)
+                  "cobertura_a_max": 10, "cobertura_b_min": 20, "cobertura_b_max": 80},
+    "docker": {"imagen": IMAGEN_DOCKER},
     "repositorios": [],
 }
 
@@ -76,9 +88,20 @@ def cargar(ruta, modelo=None, api_base=None):
                 raise SystemExit(f"Repositorio sin '{clave}': {r}\n"
                                  "Cada repositorio necesita: nombre, url (de GitHub), commit (fijo, RNF-01) y fuente "
                                  "(carpeta del código dentro del repositorio).")
+        r["grupo"] = str(r.get("grupo", "A")).strip().upper()
+        if r["grupo"] not in GRUPOS:
+            raise SystemExit(f"El repositorio {r['nombre']} tiene grupo '{r['grupo']}': tiene que ser A "
+                             f"({GRUPOS['A']}) o B ({GRUPOS['B']}).")
         if "github.com" not in r["url"]:
             raise SystemExit(f"El repositorio {r['nombre']} debe ser un repositorio público de GitHub "
                              f"(url con github.com), no: {r['url']}")
+    nivel = str(cfg["herramienta"].get("razonamiento") or "").strip().lower()
+    if nivel not in NIVELES_RAZONAMIENTO:
+        raise SystemExit(f"herramienta.razonamiento = '{nivel}' no es válido. Opciones: "
+                         + ", ".join(repr(n) for n in NIVELES_RAZONAMIENTO))
+    cfg["herramienta"]["razonamiento"] = nivel
+    if cfg["herramienta"].get("analisis_fallas") not in ("local", "ia"):
+        raise SystemExit("herramienta.analisis_fallas tiene que ser 'local' o 'ia'.")
     cfg["_archivo"] = str(ruta)
     cfg["_huella"] = hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest()[:12]
     return cfg

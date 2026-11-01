@@ -1,7 +1,6 @@
-# Dependencias del ORQUESTADOR (lo que corre en tu máquina / Codespace).
-# Qodo Cover NO va acá: vive dentro de la imagen Docker (docker/Dockerfile).
 typer==0.27.3
 click==8.5.0
 PyYAML==6.0.2
 PyGithub==2.4.0
-pygount==3.2.0Pygments==2.21.0
+pygount==3.2.0
+Pygments==2.21.0

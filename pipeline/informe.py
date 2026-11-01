@@ -2,8 +2,9 @@
 INFORME LEGIBLE de una ejecución (página HTML autocontenida).
 
 Está escrito para alguien que NO conoce el proyecto ni el código: explica qué hizo el sistema,
-muestra el "embudo" de pruebas de cada proyecto, da ejemplos reales de pruebas buenas y malas,
-y compara con Meta solo cuando el modelo es real. El reporte técnico (tabla de terminal y CSV)
+muestra el "embudo" de pruebas de cada grupo y de cada proyecto, da ejemplos reales de pruebas buenas
+y malas, y hace las dos comparaciones del diseño: grupo B (con pruebas) frente a Meta, y grupo A (sin
+pruebas) frente a grupo B. El grupo A no se compara con Meta (no son las mismas condiciones). El reporte técnico (tabla de terminal y CSV)
 sigue existiendo: python -m pipeline reporte --tecnico
 
 No usa recursos externos (fuentes, scripts, imágenes): se abre sin internet.
@@ -16,7 +17,13 @@ import textwrap
 from pathlib import Path
 
 from .config import RAIZ
-from .reporte import REFERENCIA_META
+from .reporte import REFERENCIA_META, TIPOS_LLAMADA, consumo as consumo_por_tipo
+
+GRUPOS = {
+    "A": ("Grupo A", "Programas sin pruebas", "No tenían ninguna prueba: la IA empieza de cero."),
+    "B": ("Grupo B", "Programas con pruebas", "Ya tenían pruebas escritas por sus autores: la IA agrega más, "
+                                              "como en el estudio de Meta."),
+}
 
 # Los tres controles por los que pasa cada prueba, en lenguaje simple (pedido de la tutora: que
 # alguien sin formación técnica entienda cada número). Antes la última etapa se llamaba «Sirvieron».
@@ -49,11 +56,17 @@ ESTADOS = {
     "error_cobertura_inicial": "No se pudo medir la cobertura inicial.",
     "error_llm": "La IA no respondió (cuota agotada, servicio saturado, clave o modelo inválidos). "
                  "Esta corrida no es un dato válido y hay que repetirla.",
+    "suite_falla": "Sus pruebas propias no pasan en el entorno aislado: no sirve para el grupo B y queda afuera.",
+    "fuera_de_rango": "La parte revisada al empezar quedó fuera del rango exigido a su grupo: queda afuera.",
+    "sin_modulos": "Ningún archivo tenía pruebas propias que extender y algo sin revisar: no hubo nada que hacer.",
+    "error_entorno": "El entorno aislado no tenía los ajustes del estudio: hay que reconstruir la imagen.",
 }
 
 CRITERIOS = {
     "tamaño": "Es un programa chico (500 a 5.000 líneas)",
-    "sin_pruebas_previas": "No tiene pruebas",
+    "sin_pruebas_previas": "No tiene pruebas (grupo A)",
+    "con_pruebas_previas": "Tiene pruebas escritas por sus autores (grupo B)",
+    "cobertura_inicial": "La parte revisada al empezar está en el rango de su grupo",
     "dependencias_declaradas": "Se puede instalar de forma automática",
     "licencia": "Su licencia permite usarlo para investigar",
     "actividad": "Tiene al menos un año de historia",
@@ -61,8 +74,12 @@ CRITERIOS = {
     "descarga": "Se pudo descargar",
 }
 
-# Hipótesis del anteproyecto: qué se esperaba de cada control respecto de Meta
-HIPOTESIS = {"compila": ("menor", "H1"), "pasa": ("menor", "H1"), "aporta": ("mayor", "H2")}
+# Hipótesis del anteproyecto (sección 2.1): qué se esperaba del grupo A frente al grupo B
+HIPOTESIS_AB = [
+    ("compila", "Control 1 · Arrancan", "H1"),
+    ("pasa", "Control 2 · Dan bien las 5 veces", "H1"),
+    ("significativa", "Aprobadas que comparan el resultado con lo esperado", "H2"),
+]
 
 
 def _n(v, dec=1):
@@ -86,7 +103,8 @@ def _datos(almacen, ejecucion_id):
     repos = {}
     for c in corridas:
         pruebas = almacen.consultar("SELECT * FROM pruebas WHERE corrida_id=? ORDER BY id", (c["id"],))
-        r = repos.setdefault(c["repo"], {"nombre": c["repo"], "corridas": [], "pruebas": []})
+        r = repos.setdefault(c["repo"], {"nombre": c["repo"], "grupo": c.get("grupo") or "A",
+                                         "corridas": [], "pruebas": []})
         r["corridas"].append(c)
         r["pruebas"].extend(pruebas)
     for r in repos.values():
@@ -98,21 +116,28 @@ def _datos(almacen, ejecucion_id):
             "aporta": sum(x["aporta"] for x in p),
         }
         r["aceptadas_con_asercion"] = sum(1 for x in p if x["aporta"] and x["tiene_asercion"])
+        r["aceptadas_significativas"] = sum(1 for x in p if x["aporta"] and x.get("significativa"))
         # Porcentaje del proyecto = promedio de sus corridas (unidad de análisis: el repositorio, sección 3.4.6)
         r["pct"] = {}
-        for k in ("compila", "pasa", "aporta"):
+        for k in ("compila", "pasa", "aporta", "significativa"):
             vals = []
             for c in r["corridas"]:
                 pc = [x for x in p if x["corrida_id"] == c["id"]]
-                if pc:
+                if k == "significativa":  # entre las aprobadas
+                    pc_ap = [x for x in pc if x["aporta"]]
+                    if pc_ap:
+                        vals.append(_pct(sum(1 for x in pc_ap if x.get("significativa")), len(pc_ap)))
+                elif pc:
                     vals.append(_pct(sum(x[k] for x in pc), len(pc)))
             r["pct"][k] = st.mean(vals) if vals else None
         completas = [c for c in r["corridas"] if c["estado"] == "completo"]
         r["cob_ini"] = st.mean([c["cobertura_inicial"] for c in completas]) if completas else None
         r["cob_fin"] = st.mean([c["cobertura_final"] for c in completas
                                 if c["cobertura_final"] is not None]) if completas else None
-        sem = [c.get("cobertura_semillas") for c in completas if c.get("cobertura_semillas") is not None]
-        r["cob_sem"] = st.mean(sem) if sem else None
+        base = [c.get("cobertura_base") if c.get("cobertura_base") is not None else c.get("cobertura_semillas")
+                for c in completas]
+        base = [b for b in base if b is not None]
+        r["cob_sem"] = st.mean(base) if base else None  # línea base: A = solo importar; B = suite preexistente
         r["estados"] = [c["estado"] for c in r["corridas"]]
     # Criterios de selección: el registro más reciente de cada (repo, criterio)
     sel = almacen.consultar(
@@ -121,7 +146,7 @@ def _datos(almacen, ejecucion_id):
     for s in sel:
         if s["repo"] in repos:
             repos[s["repo"]].setdefault("criterios", []).append(s)
-    return ej, list(repos.values())
+    return ej, sorted(repos.values(), key=lambda r: (r["grupo"], r["nombre"]))
 
 
 # -----------------------------------------------------------------------------------------------
@@ -142,12 +167,12 @@ def _barra_controles(cant, total, pct, ref, titulo, clase=""):
           </div>"""
 
 
-def _filas_controles(conteo, pcts, total):
+def _filas_controles(conteo, pcts, total, con_meta=True):
     filas = []
     for i, (clave, titulo, ayuda) in enumerate(ETAPAS):
         cant = conteo[clave]
         pct = 100.0 if clave == "escritas" else pcts.get(clave)
-        ref = REFERENCIA_META.get(clave)
+        ref = REFERENCIA_META.get(clave) if con_meta else None
         clase = "final" if clave == "aporta" else ""
         filas.append(f"""
         <div class="etapa etapa-{i}">
@@ -160,22 +185,71 @@ def _filas_controles(conteo, pcts, total):
     return "\n".join(filas)
 
 
+def _conteo(repos):
+    return {k: sum(r["conteo"][k] for r in repos) for k, _, _ in ETAPAS}
+
+
 def _grafico_controles(repos):
-    """GRÁFICO 1: todas las pruebas de la ejecución juntas, control por control, contra Meta."""
-    conteo = {k: sum(r["conteo"][k] for r in repos) for k, _, _ in ETAPAS}
-    total = conteo["escritas"]
-    if not total:
+    """GRÁFICO 1: embudo de cada grupo. La marca de Meta aparece solo en el grupo B (misma condición)."""
+    bloques = []
+    for g in ("A", "B"):
+        del_grupo = [r for r in repos if r["grupo"] == g]
+        conteo = _conteo(del_grupo)
+        total = conteo["escritas"]
+        if not total:
+            continue
+        pcts = {k: _pct(conteo[k], total) for k in ("compila", "pasa", "aporta")}
+        corto, titulo, ayuda = GRUPOS[g]
+        cierre = (f"En el estudio de Meta fueron {REFERENCIA_META['aporta']:.0f} de cada 100." if g == "B" else
+                  "Acá no se marca a Meta: sus programas sí tenían pruebas, así que no es la misma situación.")
+        bloques.append(f"""
+    <div class="grupo-bloque grupo-{g}">
+      <h3><span class="etiqueta-grupo g{g}">{corto}</span> {_e(titulo)}</h3>
+      <p class="como-leer">{_e(ayuda)}</p>
+      <div class="embudo">{_filas_controles(conteo, pcts, total, con_meta=(g == "B"))}</div>
+      <p class="lectura">De cada 100 pruebas que escribió la IA, <strong>{_n(pcts['aporta'], 0)} quedaron
+      aprobadas</strong>. {cierre}</p>
+    </div>""")
+    if not bloques:
         return ""
-    pcts = {k: _pct(conteo[k], total) for k in ("compila", "pasa", "aporta")}
-    aprob = pcts["aporta"]
     return f"""
   <section id="grafico-controles" class="grafico">
     <h2>1. De las pruebas que escribió la IA, ¿cuántas quedaron aprobadas?</h2>
     <p class="como-leer"><strong>Cómo leerlo:</strong> cada barra muestra cuántas pruebas siguen en pie después
-    de cada control. La línea punteada marca dónde quedó Meta (Facebook) en ese mismo control.</p>
-    <div class="embudo">{_filas_controles(conteo, pcts, total)}</div>
-    <p class="lectura">En palabras simples: <strong>de cada 100 pruebas que escribió la IA, {_n(aprob, 0)} quedaron
-    aprobadas</strong>. En el estudio de Meta fueron {REFERENCIA_META['aporta']:.0f} de cada 100.</p>
+    de cada control. En el grupo B, la línea punteada marca dónde quedó Meta (Facebook) en ese mismo control.</p>
+    {''.join(bloques)}
+  </section>"""
+
+
+def _grafico_ab(repos):
+    """GRÁFICO 2: grupo A frente a grupo B, control por control (lo que dicen las hipótesis H1 y H2)."""
+    conteos = {g: _conteo([r for r in repos if r["grupo"] == g]) for g in ("A", "B")}
+    if not (conteos["A"]["escritas"] and conteos["B"]["escritas"]):
+        return ""
+    filas = []
+    for clave, titulo, hip in HIPOTESIS_AB + [("aporta", "Control 3 · Revisan algo nuevo (aprobadas)", "")]:
+        celdas = []
+        for g in ("A", "B"):
+            c = conteos[g]
+            if clave == "significativa":
+                aprob = [x for r in repos if r["grupo"] == g for x in r["pruebas"] if x["aporta"]]
+                v = _pct(sum(1 for x in aprob if x.get("significativa")), len(aprob))
+            else:
+                v = _pct(c[clave], c["escritas"])
+            ancho = max(v or 0, 0.6)
+            celdas.append(f'<div class="ab-fila"><span class="etiqueta-grupo g{g}">{g}</span>'
+                          f'<div class="ab-pista"><div class="ab-barra g{g}" style="width:{ancho:.1f}%"></div></div>'
+                          f'<strong>{_n(v, 0)}%</strong></div>')
+        nota = (f' <span class="hip">({hip})</span>' if hip else
+                ' <span class="hip">(solo descriptivo: en A, al partir de cero, casi todo «revisa algo nuevo»)</span>')
+        filas.append(f'<div class="ab-control"><p class="ab-titulo">{_e(titulo)}{nota}</p>{"".join(celdas)}</div>')
+    return f"""
+  <section id="grafico-ab" class="grafico">
+    <h2>2. ¿Qué cambia cuando el programa no tiene pruebas? Grupo A frente a grupo B</h2>
+    <p class="como-leer"><strong>Cómo leerlo:</strong> para cada control, la barra A es el grupo sin pruebas y la
+    barra B el grupo con pruebas. Los dos grupos pasaron por exactamente el mismo proceso, con la misma IA: lo único
+    que cambia es si el programa ya tenía pruebas.</p>
+    <div class="ab">{''.join(filas)}</div>
   </section>"""
 
 
@@ -210,13 +284,14 @@ def _grafico_cobertura(repos):
         sem = r.get("cob_sem")
         base = sem if sem is not None else 0.0
         ia = max(fin - base, 0.0)
-        tip = (f"{r['nombre']}: {_n(base)}% solo con abrir los archivos + {_n(ia)} puntos de la IA = {_n(fin)}% revisado")
+        origen = "solo con abrir los archivos" if r["grupo"] == "A" else "con sus pruebas preexistentes"
+        tip = f"{r['nombre']}: {_n(base)}% {origen} + {_n(ia)} puntos de la IA = {_n(fin)}% revisado"
         seg_base = (f'<div class="seg seg-base" style="width:{base:.1f}%"><span>{_n(base, 0)}%</span></div>'
                     if base >= 0.5 else "")
         seg_ia = f'<div class="seg seg-ia" style="width:{ia:.1f}%"><span>IA +{_n(ia, 0)}</span></div>' if ia >= 0.5 else ""
         filas.append(f"""
       <div class="cob-proy">
-        <span class="cob-nombre">{_e(r['nombre'])}</span>
+        <span class="cob-nombre"><span class="etiqueta-grupo g{r['grupo']}">{r['grupo']}</span> {_e(r['nombre'])}</span>
         <div class="cob-pista" role="img" aria-label="{_e(tip)}" title="{_e(tip)}">{seg_base}{seg_ia}</div>
         <span class="cob-total"><strong>{_n(fin)}%</strong></span>
       </div>""")
@@ -228,26 +303,28 @@ def _grafico_cobertura(repos):
                  'todo el porcentaje aparece como aporte de la IA y puede estar sobreestimado.</p>')
     return f"""
   <section id="grafico-cobertura" class="grafico">
-    <h2>2. ¿Qué parte de cada programa quedó revisada?</h2>
-    <p class="como-leer"><strong>Cómo leerlo:</strong> cada barra es un programa completo (100%). Al empezar,
-    ninguno tenía pruebas: 0% revisado. El color muestra qué parte quedó revisada al final y gracias a qué.</p>
+    <h2>3. ¿Qué parte de cada programa quedó revisada?</h2>
+    <p class="como-leer"><strong>Cómo leerlo:</strong> cada barra es un programa completo (100%). La letra indica
+    su grupo. El color muestra qué parte quedó revisada al final y gracias a qué.</p>
     <div class="cob-leyenda">
-      <span><i class="muestra seg-base"></i> Se revisa solo con abrir los archivos (no es mérito de la IA)</span>
+      <span><i class="muestra seg-base"></i> Ya estaba revisado antes de la IA (A: solo con abrir los archivos;
+        B: sus propias pruebas). No es mérito de la IA</span>
       <span><i class="muestra seg-ia"></i> Lo que agregaron las pruebas aprobadas de la IA</span>
       <span><i class="muestra vacia"></i> Quedó sin revisar</span>
     </div>
     <div class="cob-grafico">{''.join(filas)}
       <div class="cob-escala" aria-hidden="true"><span></span><div><span>0%</span><span>50%</span><span>100%</span></div><span></span></div>
     </div>
-    <p class="lectura">Por qué separamos el primer tramo: al abrir un archivo, Python ya recorre una parte (la
-    lista de funciones, los valores fijos). Eso cuenta como «revisado» aunque no haya ninguna prueba, así que no
-    se le puede atribuir a la IA. <strong>El aporte real de la IA es solo el segundo tramo.</strong></p>
+    <p class="lectura">Por qué separamos el primer tramo: en el grupo B, lo que ya revisaban las pruebas de sus
+    autores. En el grupo A, al abrir un archivo Python ya recorre una parte (la lista de funciones, los valores
+    fijos), y eso cuenta como «revisado» aunque no haya ninguna prueba. Ninguna de las dos cosas es mérito de la IA:
+    <strong>su aporte real es solo el segundo tramo.</strong></p>
     {nota_base}
   </section>"""
 
 
 def _embudo(r):
-    return _filas_controles(r["conteo"], r["pct"], r["conteo"]["escritas"])
+    return _filas_controles(r["conteo"], r["pct"], r["conteo"]["escritas"], con_meta=(r["grupo"] == "B"))
 
 
 def _cobertura(r):
@@ -257,8 +334,9 @@ def _cobertura(r):
     sem = r.get("cob_sem")
     if sem is None:
         return f'<p class="cob-texto">Parte del programa revisada al final: <strong>{_n(fin)}%</strong>.</p>'
-    return (f'<p class="cob-texto">Parte del programa revisada: <strong>{_n(sem)}%</strong> solo con abrir los '
-            f'archivos → <strong>{_n(fin)}%</strong> con las pruebas aprobadas. '
+    origen = "solo con abrir los archivos" if r["grupo"] == "A" else "con las pruebas que ya tenía"
+    return (f'<p class="cob-texto">Parte del programa revisada: <strong>{_n(sem)}%</strong> {origen} '
+            f'→ <strong>{_n(fin)}%</strong> sumando las pruebas aprobadas de la IA. '
             f'Aporte de la IA: <strong>+{_n(fin - sem)} puntos</strong>.</p>')
 
 
@@ -287,11 +365,11 @@ def _tarjeta_repo(r, n_corridas):
     else:
         verificacion = ""
         if c["aporta"]:
-            sin = c["aporta"] - r["aceptadas_con_asercion"]
+            sin = c["aporta"] - r["aceptadas_significativas"]
             verificacion = (f'<p class="nota-asercion">De las {c["aporta"]} aprobadas, '
-                            f'<strong>{r["aceptadas_con_asercion"]}</strong> comparan el resultado con lo esperado'
-                            + (f' y <strong>{sin}</strong> solo ejecutan código sin comparar nada '
-                               f'(suman revisión, pero no detectarían un error).' if sin else '.')
+                            f'<strong>{r["aceptadas_significativas"]}</strong> comparan el resultado con lo esperado'
+                            + (f' y <strong>{sin}</strong> solo ejecutan código o comprueban algo trivial '
+                               f'(suman revisión, pero difícilmente detectarían un error).' if sin else '.')
                             + '</p>')
         nota_corridas = (f'<p class="nota">Cantidades: suma de las {n_corridas} corridas. '
                          f'Porcentajes: promedio de las corridas.</p>' if n_corridas > 1 else "")
@@ -302,54 +380,85 @@ def _tarjeta_repo(r, n_corridas):
         <strong>{c['aporta']}</strong> quedaron aprobadas.</p>{nota_corridas}"""
     return f"""
     <article class="repo">
-      <h3>{_e(r['nombre'])}</h3>
+      <h3><span class="etiqueta-grupo g{r['grupo']}">{r['grupo']}</span> {_e(r['nombre'])}</h3>
       {aviso}{cuerpo}{_criterios(r)}
     </article>"""
 
 
 def _comparacion(repos):
+    """Las dos comparaciones del diseño, en tablas: B frente a Meta y A frente a B."""
     con_datos = [r for r in repos if r["conteo"]["escritas"]]
     if not con_datos:
         return ""
-    cab = "".join(f'<th class="num">{_e(r["nombre"])}</th>' for r in con_datos)
-    filas = []
-    for clave, titulo, _ in ETAPAS[1:]:
-        vals = [r["pct"].get(clave) for r in con_datos]
-        ref = REFERENCIA_META[clave]
-        sentido, hip = HIPOTESIS[clave]
-        validos = [v for v in vals if v is not None]
-        if not validos:
-            continue
-        med = st.median(validos)
-        va = (med < ref) if sentido == "menor" else (med > ref)
-        celdas = "".join(f'<td class="num">{_n(v, 0)}%</td>' for v in vals)
-        resultado = (f"Salió {'más bajo' if med < ref else 'más alto'} que Meta: "
-                     f"{'coincide con lo esperado' if va else 'no coincide con lo esperado'}")
-        filas.append(f"""
-        <tr>
-          <th scope="row">{_e(titulo.replace(' = APROBADAS', ''))}</th>{celdas}
-          <td class="num">{ref:.0f}%</td>
-          <td>{'Menos' if sentido == 'menor' else 'Más'} que Meta ({hip})</td>
-          <td class="{'va' if va else 'no-va'}">{resultado}</td>
-        </tr>""")
+    b = [r for r in con_datos if r["grupo"] == "B"]
+    a = [r for r in con_datos if r["grupo"] == "A"]
+    partes = []
+
+    def mediana(rs, k):
+        vals = [r["pct"].get(k) for r in rs if r["pct"].get(k) is not None]
+        return st.median(vals) if vals else None
+
+    if b:
+        cab = "".join(f'<th class="num">{_e(r["nombre"])}</th>' for r in b)
+        filas = []
+        for clave, titulo, _ in ETAPAS[1:]:
+            celdas = "".join(f'<td class="num">{_n(r["pct"].get(clave), 0)}%</td>' for r in b)
+            med = mediana(b, clave)
+            filas.append(f"""
+        <tr><th scope="row">{_e(titulo.replace(' = APROBADAS', ''))}</th>{celdas}
+          <td class="num"><strong>{_n(med, 0)}%</strong></td><td class="num">{REFERENCIA_META[clave]:.0f}%</td>
+          <td class="num">{'' if med is None else ('+' if med >= REFERENCIA_META[clave] else '−') + _n(abs(med - REFERENCIA_META[clave]), 0)} pts</td></tr>""")
+        partes.append(f"""
+    <h3>4.1 Grupo B frente a Meta (la replicación)</h3>
+    <p>En 2024 Meta (la empresa de Facebook e Instagram) publicó que, de cada 100 pruebas que escribió su
+    herramienta sobre programas que <strong>ya tenían pruebas</strong>, 75 arrancaron, 57 dieron bien siempre y 25
+    quedaron aprobadas. El grupo B está en esa misma situación, así que acá sí se puede comparar.</p>
+    <div class="tabla-scroll"><table>
+      <thead><tr><th>Control</th>{cab}<th class="num">Grupo B (mediana)</th><th class="num">Meta 2024</th>
+        <th class="num">Diferencia</th></tr></thead>
+      <tbody>{''.join(filas)}</tbody>
+    </table></div>
+    <p class="nota">Aun en la misma situación, cambian el lenguaje (Python frente a Kotlin), la IA y la herramienta
+    (Qodo Cover es la versión abierta del método de Meta). Por eso la diferencia se lee como «cuánto se parece»,
+    no como «quién es mejor».</p>""")
+    if a and b:
+        filas = []
+        for clave, titulo, hip in HIPOTESIS_AB:
+            ma, mb = mediana(a, clave), mediana(b, clave)
+            if ma is None or mb is None:
+                continue
+            va = ma < mb
+            filas.append(f"""
+        <tr><th scope="row">{_e(titulo)}</th><td class="num">{_n(ma, 0)}%</td><td class="num">{_n(mb, 0)}%</td>
+          <td>A menos que B ({hip})</td>
+          <td class="{'va' if va else 'no-va'}">{'Coincide con lo esperado' if va else 'No coincide con lo esperado'}</td></tr>""")
+        partes.append(f"""
+    <h3>4.2 Grupo A frente a grupo B (la pregunta de la tesis)</h3>
+    <p>Los dos grupos pasaron por el mismo proceso, con la misma IA y la misma herramienta: la única diferencia es
+    si el programa ya tenía pruebas. Por eso esta es la comparación que responde la pregunta del estudio.</p>
+    <div class="tabla-scroll"><table>
+      <thead><tr><th>Qué se mide</th><th class="num">Grupo A (sin pruebas)</th><th class="num">Grupo B (con pruebas)</th>
+        <th>Lo que esperábamos (hipótesis)</th><th>Resultado</th></tr></thead>
+      <tbody>{''.join(filas)}</tbody>
+    </table></div>""")
+    elif a:
+        partes.append("""
+    <p class="nota">Esta ejecución tiene solo programas del grupo A. Para saber qué cambia cuando un programa no tiene
+    pruebas hace falta compararlo con el grupo B, procesado de la misma forma.</p>""")
+    if a:
+        partes.append("""
+    <p class="nota"><strong>Por qué el grupo A no se compara con Meta:</strong> si un programa no tiene ninguna
+    prueba, casi cualquier prueba que funcione «revisa algo nuevo», así que el control 3 se aprueba casi solo. Meta
+    trabajó con programas que ya tenían pruebas; comparar su 25% con el grupo A mezclaría dos situaciones distintas.</p>""")
     n = len(con_datos)
     return f"""
   <section id="comparacion">
-    <h2>3. Comparación con Meta, programa por programa</h2>
-    <p>En 2024 Meta (la empresa de Facebook e Instagram) publicó que, de cada 100 pruebas que escribió su
-    herramienta, 75 arrancaron, 57 dieron bien siempre y 25 quedaron aprobadas. Sus programas ya tenían pruebas
-    escritas por personas; acá se mide lo mismo en programas que no tienen ninguna.</p>
-    <div class="tabla-scroll">
-    <table>
-      <thead><tr><th>Control</th>{cab}<th class="num">Meta 2024</th>
-        <th>Lo que esperábamos (hipótesis)</th><th>Resultado</th></tr></thead>
-      <tbody>{''.join(filas)}</tbody>
-    </table>
-    </div>
-    <p class="nota">Los porcentajes son sobre todas las pruebas que escribió la IA en cada programa. El
-    «Resultado» usa el programa del medio (mediana) de los {n}.
-    {'Con tan pocos programas esto es una primera mirada, no una conclusión: ' if n < 10 else ''}la
-    comparación con prueba estadística (Wilcoxon) se hace sobre los 15 a 20 programas del experimento completo.</p>
+    <h2>4. Comparaciones</h2>
+    {''.join(partes)}
+    <p class="nota">Los porcentajes son sobre todas las pruebas que escribió la IA en cada programa (salvo la fila de
+    «comparan el resultado», que es sobre las aprobadas). Se usa el programa del medio (mediana).
+    {'Con tan pocos programas esto es una primera mirada, no una conclusión: ' if n < 10 else ''}la comparación con
+    prueba estadística (Wilcoxon y Mann-Whitney) se hace sobre el experimento completo.</p>
   </section>"""
 
 
@@ -357,7 +466,7 @@ def _ejemplos(repos):
     todas = [p for r in repos for p in r["pruebas"]]
     if not todas:
         return ""
-    sin_asercion = [p for p in todas if p["aporta"] and not p["tiene_asercion"]]
+    sin_asercion = [p for p in todas if p["aporta"] and not p.get("significativa")]
     trampa = sin_asercion[0] if sin_asercion else None
     mostrados = {_limpio(trampa["codigo_prueba"])} if trampa else set()
     bloques = []
@@ -388,7 +497,7 @@ def _ejemplos(repos):
         p = trampa
         extra = f"""
       <figure class="ejemplo cat-trampa">
-        <figcaption><strong>Aprobada, pero no compara nada</strong>
+        <figcaption><strong>Aprobada, pero no compara nada importante</strong>
           <span class="cuantas">{len(sin_asercion)} en total</span>
           <span class="explica">Superó los tres controles, pero solo pone a andar el código y nunca compara el
           resultado con lo esperado: si la función estuviera rota, esta prueba igual daría bien. Por eso el estudio
@@ -397,7 +506,7 @@ def _ejemplos(repos):
       </figure>"""
     return f"""
   <section id="ejemplos">
-    <h2>6. Ejemplos reales de esta ejecución</h2>
+    <h2>7. Ejemplos reales de esta ejecución</h2>
     <p>Una prueba de cada tipo, tal como la escribió la IA. No hace falta leer el código: el título y la
     explicación de cada una dicen por qué se aprobó o se descartó.</p>
     {''.join(bloques)}{extra}
@@ -422,6 +531,9 @@ def _detalles_tecnicos(ej, cfg, repos):
         ("Modelo de lenguaje", ej["modelo"]),
         ("Herramienta evaluada", f"Qodo Cover (cover-agent), commit {str(h.get('qodo_cover_commit', ''))[:10]}"),
         ("Rondas por archivo", h.get("max_iteraciones")),
+        ("Razonamiento interno de la IA", h.get("razonamiento") or "el que trae el modelo por defecto"),
+        ("Explicación de pruebas fallidas", "con la salida de pytest (sin consultar a la IA)"
+         if h.get("analisis_fallas", "ia") == "local" else "pedida a la IA (comportamiento original)"),
         ("Repeticiones por prueba (estabilidad)", h.get("ejecuciones_por_prueba")),
         ("Corridas por proyecto", cfg.get("experimento", {}).get("corridas_por_repo")),
         ("Tiempo total de proceso", f"{_n(dur / 60)} minutos"),
@@ -434,12 +546,25 @@ def _detalles_tecnicos(ej, cfg, repos):
         ("Huella de la configuración", ej["huella_config"]),
     ]
     tabla = "".join(f"<tr><th scope='row'>{_e(a)}</th><td>{_e(b)}</td></tr>" for a, b in filas)
+    uso = consumo_por_tipo(_ALMACEN[0], ej["id"]) if _ALMACEN else {}
+    tabla_uso = ""
+    if uso:
+        filas_uso = "".join(
+            f"<tr><th scope='row'>{_e(TIPOS_LLAMADA.get(t, t))}</th><td class='num'>{d.get('llamadas', 0)}</td>"
+            f"<td class='num'>{d.get('entrada', 0):,}</td><td class='num'>{d.get('salida', 0):,}</td>"
+            f"<td class='num'>{d.get('razonamiento', 0):,}</td></tr>".replace(",", ".")
+            for t, d in sorted(uso.items(), key=lambda x: -(x[1].get('entrada', 0) + x[1].get('salida', 0))))
+        tabla_uso = f"""
+      <p>Consumo de la IA según para qué se la consultó (los tokens de razonamiento están incluidos en la salida):</p>
+      <div class="tabla-scroll"><table class="tecnica"><thead><tr><th>Para qué</th><th class="num">Llamadas</th>
+        <th class="num">Entrada</th><th class="num">Salida</th><th class="num">Razonamiento</th></tr></thead>
+        <tbody>{filas_uso}</tbody></table></div>"""
     return f"""
   <section id="tecnico">
     <details>
       <summary>Detalles técnicos de la ejecución</summary>
       <p>Lo necesario para que otra persona repita exactamente esta ejecución (reproducibilidad, RNF-01).</p>
-      <div class="tabla-scroll"><table class="tecnica">{tabla}</table></div>
+      <div class="tabla-scroll"><table class="tecnica">{tabla}</table></div>{tabla_uso}
     </details>
   </section>"""
 
@@ -447,12 +572,16 @@ def _detalles_tecnicos(ej, cfg, repos):
 # -----------------------------------------------------------------------------------------------
 # Página completa
 # -----------------------------------------------------------------------------------------------
+_ALMACEN = []
+
+
 def generar_html(almacen, ejecucion_id=None, destino=None):
     if ejecucion_id is None:
         fila = almacen.consultar("SELECT MAX(id) AS id FROM ejecuciones")
         ejecucion_id = fila[0]["id"] if fila else None
     if not ejecucion_id:
         return None
+    _ALMACEN[:] = [almacen]
     ej, repos = _datos(almacen, ejecucion_id)
     try:
         cfg = json.loads(ej["config_json"] or "{}")
@@ -464,13 +593,32 @@ def generar_html(almacen, ejecucion_id=None, destino=None):
     n_repos = len(repos)
     nombre_exp = {"prueba": "Prueba rápida", "piloto": "Prueba piloto"}.get(ej["experimento"], ej["experimento"])
     nombres = ", ".join(r["nombre"] for r in repos)
-    tarjetas = "".join(_tarjeta_repo(r, n_corridas) for r in repos)
+    tarjetas = ""
+    for g in ("A", "B"):
+        del_grupo = [r for r in repos if r["grupo"] == g]
+        if del_grupo:
+            corto, titulo, ayuda = GRUPOS[g]
+            tarjetas += (f'<h3 class="titulo-grupo"><span class="etiqueta-grupo g{g}">{corto}</span> {_e(titulo)}</h3>'
+                         + "".join(_tarjeta_repo(r, n_corridas) for r in del_grupo))
+    n_a = sum(1 for r in repos if r["grupo"] == "A")
+    n_b = sum(1 for r in repos if r["grupo"] == "B")
+    partes_grupos = []
+    if n_a:
+        partes_grupos.append(f"{n_a} que no tenía{'n' if n_a != 1 else ''} ninguna (grupo A)")
+    if n_b:
+        partes_grupos.append(f"{n_b} que ya tenía{'n' if n_b != 1 else ''} pruebas de sus autores (grupo B)")
     sem_vals = [r["cob_sem"] for r in repos if r.get("cob_sem") is not None and r.get("cob_fin") is not None]
     aporte_vals = [r["cob_fin"] - r["cob_sem"] for r in repos
                    if r.get("cob_sem") is not None and r.get("cob_fin") is not None]
     linea_aporte = (f"<li>La parte de cada programa revisada gracias a la IA subió entre "
                     f"<strong>{_n(min(aporte_vals), 0)} y {_n(max(aporte_vals), 0)} puntos</strong> "
-                    f"(sin contar lo que se revisa solo con abrir los archivos).</li>" if aporte_vals else "")
+                    f"(sin contar lo que ya estaba revisado antes de la IA).</li>" if aporte_vals else "")
+    lineas_grupo = ""
+    for g in ("A", "B"):
+        c = _conteo([r for r in repos if r["grupo"] == g])
+        if c["escritas"]:
+            lineas_grupo += (f"<li>{GRUPOS[g][0]} ({GRUPOS[g][1].lower()}): la IA escribió <strong>{c['escritas']}"
+                             f"</strong> pruebas y <strong>{c['aporta']}</strong> quedaron aprobadas.</li>")
 
     pagina = f"""<!DOCTYPE html>
 <html lang="es">
@@ -483,15 +631,16 @@ def generar_html(almacen, ejecucion_id=None, destino=None):
 <body>
 <main>
   <header>
-    <p class="contexto">Tesis FP-UNA · Generación automática de pruebas con IA en programas sin pruebas</p>
+    <p class="contexto">Tesis FP-UNA · Generación automática de pruebas con IA según las pruebas que ya tiene el programa</p>
     <h1>{_e(nombre_exp)}</h1>
     <p class="entrada">Le pedimos a una IA ({_e(ej['modelo'].split('/')[-1])}) que escriba pruebas para
-      {n_repos} programa{'s' if n_repos != 1 else ''} real{'es' if n_repos != 1 else ''} que no tenía{'n' if n_repos != 1 else ''}
-      ninguna ({_e(nombres)}), y medimos cuántas de esas pruebas valen la pena.</p>
+      {n_repos} programa{'s' if n_repos != 1 else ''} real{'es' if n_repos != 1 else ''}: {' y '.join(partes_grupos)}.
+      Medimos cuántas de esas pruebas valen la pena y si eso cambia según el programa ya tenga pruebas o no.</p>
     <p class="datos-ejecucion">Ejecución {ej['id']} · {_e(ej['inicio'])}</p>
   </header>
   {_grafico_controles(repos)}
   {_que_es_aprobada()}
+  {_grafico_ab(repos)}
   {_grafico_cobertura(repos)}
   {_comparacion(repos)}
 
@@ -500,6 +649,7 @@ def generar_html(almacen, ejecucion_id=None, destino=None):
     <ul>
       <li>La IA escribió <strong>{escritas}</strong> pruebas en total y <strong>{aprobadas}</strong> quedaron
         aprobadas (superaron los tres controles).</li>
+      {lineas_grupo}
       {linea_aporte}
       <li>Todo el proceso fue automático: elegir los programas, prepararlos, pedirle las pruebas a la IA,
         aplicar los controles y medir.</li>
@@ -507,29 +657,30 @@ def generar_html(almacen, ejecucion_id=None, destino=None):
   </section>
 
   <section id="proyectos">
-    <h2>4. Programa por programa</h2>
-    <p class="leyenda">Los mismos controles del gráfico 1, para cada programa por separado. La línea
+    <h2>5. Programa por programa</h2>
+    <p class="leyenda">Los mismos controles del gráfico 1, para cada programa por separado. En el grupo B, la línea
       punteada (<span class="meta-muestra" aria-hidden="true"></span>) marca dónde quedó Meta.</p>
     {tarjetas}
   </section>
 
   <section id="pasos">
-    <h2>5. Cómo se obtuvieron estos números</h2>
+    <h2>6. Cómo se obtuvieron estos números</h2>
     <ol class="pasos">
-      <li><strong>Eligió los programas</strong> y verificó que cumplan los criterios del estudio: chicos, sin pruebas,
-        instalables de forma automática.</li>
+      <li><strong>Eligió los programas</strong> y verificó que cumplan los criterios del estudio: chicos, instalables
+        de forma automática y, según el grupo, sin pruebas (A) o con pruebas de sus autores que funcionan (B).</li>
       <li><strong>Los preparó</strong> cada uno en un entorno aislado (un contenedor), instalando lo que necesitan.</li>
-      <li><strong>Midió la parte revisada al empezar</strong>: 0%, porque no tenían pruebas. Y midió también cuánto
-        se revisa solo con abrir los archivos, para no atribuírselo a la IA.</li>
+      <li><strong>Midió la parte revisada al empezar</strong>. En el grupo A: 0%, y además cuánto se revisa solo con
+        abrir los archivos. En el grupo B: lo que ya revisaban sus pruebas. Eso es la base: no se le atribuye a la IA.</li>
       <li><strong>Le pidió pruebas a la IA</strong>, archivo por archivo, a través de Qodo Cover: la versión
-        abierta de la herramienta que usó Meta.</li>
-      <li><strong>Aplicó los tres controles</strong> a cada prueba y midió la parte revisada al final.</li>
+        abierta de la herramienta que usó Meta. En el grupo B, la IA agrega pruebas al archivo de pruebas real.</li>
+      <li><strong>Aplicó los tres controles</strong> a cada prueba y midió la parte revisada al final. En el grupo B,
+        una prueba solo se aprueba si revisa algo que ninguna de las pruebas de los autores revisaba.</li>
     </ol>
   </section>
   {_ejemplos(repos)}
 
   <section id="glosario">
-    <h2>7. Palabras que aparecen en el informe</h2>
+    <h2>8. Palabras que aparecen en el informe</h2>
     <dl>
       <dt>Prueba (prueba unitaria)</dt><dd>Un programita que verifica que una parte del programa hace lo que
         debe. Por ejemplo: le da 2 y 3 a una función que suma y comprueba que devuelva 5.</dd>
@@ -539,9 +690,15 @@ def generar_html(almacen, ejecucion_id=None, destino=None):
         pruebas. Lo que nunca se pone a andar, nadie lo revisó.</dd>
       <dt>Abrir los archivos (importar)</dt><dd>Lo que hace Python antes de usar un archivo: lo lee de arriba
         abajo. Solo con eso ya «recorre» una parte, y por eso se mide aparte.</dd>
+      <dt>Grupo A y grupo B</dt><dd>Grupo A: programas sin ninguna prueba. Grupo B: programas que ya tenían
+        pruebas escritas por sus autores. Se procesan exactamente igual; compararlos muestra qué cambia cuando un
+        programa no tiene pruebas.</dd>
       <dt>Meta</dt><dd>La empresa de Facebook e Instagram. En 2024 publicó los resultados de su herramienta
-        de pruebas con IA; este estudio repite esa medición en programas chicos que no tienen ninguna prueba,
-        que es la situación de muchos equipos pequeños.</dd>
+        de pruebas con IA sobre programas que ya tenían pruebas. El grupo B repite esa medición; el grupo A la
+        extiende a programas sin pruebas, la situación de muchos equipos pequeños.</dd>
+      <dt>Compara con lo esperado</dt><dd>Una prueba que, además de poner a andar el código, verifica que el
+        resultado sea el correcto (por ejemplo, que la suma de 2 y 3 dé 5). Una que solo comprueba «que algo
+        devolvió algo» no cuenta.</dd>
       <dt>Qodo Cover</dt><dd>La herramienta de código abierto que reproduce el método de Meta. Es la que le pide
         las pruebas a la IA y aplica los controles.</dd>
     </dl>
@@ -611,7 +768,7 @@ p { max-width: 68ch; }
 .muestra { display: inline-block; width: .9rem; height: .9rem; border-radius: 3px; flex: none; }
 .muestra.vacia { background: var(--codigo); border: 1px solid var(--linea); }
 .cob-grafico { display: grid; gap: .7rem; }
-.cob-proy, .cob-escala { display: grid; grid-template-columns: 8rem 1fr 4.5rem; gap: .9rem; align-items: center; }
+.cob-proy, .cob-escala { display: grid; grid-template-columns: 11rem 1fr 4.5rem; gap: .9rem; align-items: center; }
 .cob-nombre { font-weight: 600; }
 .cob-pista { display: flex; gap: 2px; height: 2.1rem; background: var(--codigo); border-radius: 4px; overflow: hidden; }
 .seg { height: 100%; display: flex; align-items: center; justify-content: center; min-width: 0; }
@@ -680,6 +837,20 @@ code { font-family: ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", 
 .motivo { font-size: .88rem; margin: .5rem 0 0; }
 .motivo code { background: var(--codigo); padding: .1rem .3rem; border-radius: 3px; word-break: break-word; }
 
+.etiqueta-grupo { display: inline-block; min-width: 1.6rem; padding: .05rem .45rem; border-radius: 4px;
+  font: 700 .8rem/1.4 system-ui, sans-serif; color: #fff; text-align: center; vertical-align: middle; }
+.etiqueta-grupo.gA { background: var(--serie-1); } .etiqueta-grupo.gB { background: var(--serie-2); }
+.grupo-bloque { margin: 1.6rem 0 2rem; }
+.grupo-bloque h3 { margin-bottom: .2rem; }
+.titulo-grupo { margin: 2rem 0 .4rem; }
+.ab { display: grid; gap: 1.3rem; }
+.ab-titulo { margin: 0 0 .4rem; font-weight: 600; }
+.ab-titulo .hip { font-weight: 400; color: var(--tenue); font-size: .88rem; }
+.ab-fila { display: grid; grid-template-columns: 2rem 1fr 3.5rem; gap: .7rem; align-items: center; margin: .25rem 0; }
+.ab-fila strong { text-align: right; font-variant-numeric: tabular-nums; }
+.ab-pista { height: 1.3rem; background: var(--codigo); border-radius: 3px; }
+.ab-barra { height: 100%; border-radius: 3px; }
+.ab-barra.gA { background: var(--serie-1); } .ab-barra.gB { background: var(--serie-2); }
 dl dt { font-weight: 700; margin-top: 1rem; }
 dl dd { margin: .2rem 0 0; max-width: 68ch; }
 

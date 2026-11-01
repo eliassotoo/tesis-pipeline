@@ -139,7 +139,9 @@ def dias_de_actividad(raiz):
 
 NOMBRES_CRITERIOS = {
     "tamaño": "Tamaño",
-    "sin_pruebas_previas": "Sin pruebas previas",
+    "sin_pruebas_previas": "Sin pruebas preexistentes (grupo A)",
+    "con_pruebas_previas": "Con suite de pruebas preexistente (grupo B)",
+    "cobertura_inicial": "Cobertura inicial dentro del rango de su grupo",
     "dependencias_declaradas": "Se puede instalar solo",
     "licencia": "Licencia",
     "actividad": "Al menos un año de historia",
@@ -152,7 +154,7 @@ def verificar(cfg, almacen, carpeta_cache):
     exp = cfg["experimento"]["nombre"]
     aptos = []
     for repo in cfg["repositorios"]:
-        print(f"\n>> Proyecto {repo['nombre']}")
+        print(f"\n>> Proyecto {repo['nombre']}  (grupo {repo['grupo']})")
         try:
             raiz, commit = preparar_codigo(repo, carpeta_cache)
         except Exception as e:
@@ -166,8 +168,14 @@ def verificar(cfg, almacen, carpeta_cache):
         resultados.append(("tamaño", crit["lineas_min"] <= lineas <= crit["lineas_max"],
                            f"{lineas} líneas de código en '{repo['fuente']}' (rango {crit['lineas_min']}–{crit['lineas_max']})"))
         pruebas = detectar_pruebas(raiz)
-        resultados.append(("sin_pruebas_previas", not pruebas,
-                           "no se encontraron pruebas" if not pruebas else "encontradas: " + ", ".join(pruebas[:5])))
+        if repo["grupo"] == "A":
+            resultados.append(("sin_pruebas_previas", not pruebas,
+                               "no se encontraron pruebas" if not pruebas else "encontradas: " + ", ".join(pruebas[:5])))
+        else:
+            archivos = [p for p in pruebas if Path(p).name.startswith("test_") or p.endswith("_test.py")]
+            resultados.append(("con_pruebas_previas", bool(archivos),
+                               f"{len(archivos)} archivos de prueba: " + ", ".join(archivos[:5]) if archivos
+                               else "no se encontraron archivos de prueba"))
         cumple_deps, detalle_deps = dependencias_declaradas(raiz)
         resultados.append(("dependencias_declaradas", cumple_deps, detalle_deps))
         lic = licencia(raiz)
@@ -196,11 +204,12 @@ def verificar(cfg, almacen, carpeta_cache):
 # ----------------------------------------------------------------------------
 # Búsqueda de candidatos en GitHub
 # ----------------------------------------------------------------------------
-def buscar(salida_csv, maximo=30, estrellas_min=10, creado_desde=None):
+def buscar(salida_csv, maximo=30, estrellas_min=10, creado_desde=None, grupo="A"):
     """
-    Busca repositorios Python en GitHub y descarta automáticamente los que tienen pruebas
-    (mirando el árbol de archivos sin descargar el código). El resultado es una lista de
-    candidatos para revisar a mano y luego pasar a la configuración con su commit fijo.
+    Busca repositorios Python en GitHub mirando el árbol de archivos sin descargar el código.
+    Grupo A: descarta los que tienen pruebas. Grupo B: se queda solo con los que tienen pruebas.
+    El resultado es una lista de candidatos para revisar a mano y luego pasar a la configuración
+    con su commit fijo. La cobertura inicial (rango del grupo B) se mide recién al ejecutar.
     """
     from github import Auth, Github
 
@@ -227,7 +236,8 @@ def buscar(salida_csv, maximo=30, estrellas_min=10, creado_desde=None):
             print(f"   (salteado {r.full_name}: {e})")
             continue
         rutas = [e.path for e in arbol if e.type == "blob"]
-        if any(PATRON_PRUEBAS.search(p) for p in rutas):
+        tiene_pruebas = any(PATRON_PRUEBAS.search(p) for p in rutas)
+        if tiene_pruebas != (grupo == "B"):
             continue
         py = [e for e in arbol if e.type == "blob" and e.path.endswith(".py")]
         bytes_py = sum(e.size or 0 for e in py)
@@ -235,7 +245,7 @@ def buscar(salida_csv, maximo=30, estrellas_min=10, creado_desde=None):
         if not (300 <= lineas_estimadas <= 8000):
             continue
         filas.append({
-            "nombre": r.full_name.replace("/", "__"), "url": r.clone_url, "commit": commit,
+            "nombre": r.full_name.replace("/", "__"), "grupo": grupo, "url": r.clone_url, "commit": commit,
             "estrellas": r.stargazers_count, "creado": r.created_at.date().isoformat(),
             "ultimo_push": r.pushed_at.date().isoformat(), "archivos_py": len(py),
             "lineas_estimadas": lineas_estimadas,

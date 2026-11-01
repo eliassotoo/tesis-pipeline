@@ -21,6 +21,13 @@ RUN python -m venv /opt/qodo \
  && /opt/qodo/bin/pip install --no-cache-dir -c /tmp/qodo-constraints.txt \
       "cover-agent @ git+https://github.com/qodo-ai/qodo-cover.git@${QODO_COVER_COMMIT}"
 
+# --- Ajustes del estudio sobre Qodo Cover (ver docker/parche_qodo.py y docker/tesis_llm.py) ---
+# Controlan el consumo del modelo (nivel de razonamiento, explicación local de las fallas) y anotan
+# los tokens de cada llamada. No cambian los criterios de filtrado de la herramienta. Si el código de
+# cover-agent no fuera el esperado, la construcción de la imagen falla en vez de aplicarlos a ciegas.
+COPY tesis_llm.py parche_qodo.py /tmp/tesis/
+RUN /opt/qodo/bin/python /tmp/tesis/parche_qodo.py
+
 # --- Python "del repositorio": acá se instalan sus dependencias y corren sus pruebas ---
 RUN python -m pip install --no-cache-dir pytest==9.1.1 pytest-cov==7.1.0 pytest-timeout==2.4.0
 

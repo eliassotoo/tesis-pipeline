@@ -30,7 +30,7 @@ from . import informe as mod_informe
 from . import reporte as mod_reporte
 from . import seleccion
 from .almacen import Almacen
-from .config import CLAVES_API, MODELO_POR_DEFECTO, RAIZ, cargar, clave_api_requerida
+from .config import CLAVES_API, IMAGEN_DOCKER, MODELO_POR_DEFECTO, NIVELES_RAZONAMIENTO, RAIZ, cargar, clave_api_requerida
 from .ejecucion import docker_disponible, ejecutar as mod_ejecutar, info_imagen
 
 
@@ -51,7 +51,7 @@ app = typer.Typer(add_completion=False, no_args_is_help=True,
 
 DB = RAIZ / "resultados" / "resultados.db"
 CACHE = RAIZ / "resultados" / "_repos"
-IMAGEN = "tesis-pipeline-runner:h4"
+IMAGEN = IMAGEN_DOCKER
 
 
 def _ok(cond, texto, ayuda=""):
@@ -131,15 +131,21 @@ def modelos(filtro: str = typer.Option("flash", help="Texto que debe contener el
     typer.echo("Para usar otro sin tocar archivos:  python -m pipeline prueba --modelo gemini/NOMBRE")
 
 
-def _chequear_llm(modelo, api_base="", sin_docker=False, mostrar=True):
-    """Manda un mensaje corto al modelo. Devuelve el código de salida (0 = funciona)."""
+def _chequear_llm(modelo, api_base="", sin_docker=False, mostrar=True, razonamiento=""):
+    """
+    Manda un mensaje corto al modelo, con el mismo nivel de razonamiento que va a usar el experimento.
+    Devuelve el código de salida (0 = funciona).
+    """
     codigo_py = (
         "import litellm,sys\n"
-        f"kw=dict(model={modelo!r}, messages=[{{'role':'user','content':'Respondé solo: funciona'}}], max_tokens=500)\n"
+        f"kw=dict(model={modelo!r}, messages=[{{'role':'user','content':'Respondé solo: funciona'}}], max_tokens=2048)\n"
         f"kw.update(api_base={api_base!r}) if {api_base!r} else None\n"
+        f"kw.update(reasoning_effort={razonamiento!r}) if {razonamiento!r} else None\n"
         "r=litellm.completion(**kw)\n"
         "print('RESPUESTA DEL MODELO:', r.choices[0].message.content)\n"
-        "print('tokens usados:', r.usage.total_tokens)\n")
+        "d=getattr(r.usage,'completion_tokens_details',None)\n"
+        "print('tokens usados:', r.usage.total_tokens, '(entrada', r.usage.prompt_tokens, '/ salida',"
+        " r.usage.completion_tokens, '/ de razonamiento', (getattr(d,'reasoning_tokens',0) or 0), ')')\n")
     if sin_docker:
         cmd = [sys.executable, "-c", codigo_py]
     else:
@@ -168,20 +174,28 @@ def _chequear_llm(modelo, api_base="", sin_docker=False, mostrar=True):
                 typer.echo("   -> Ese nombre de modelo no existe. Mirá los vigentes con:  python -m pipeline modelos")
             elif "api key" in texto or "api_key" in texto or "401" in texto or "403" in texto or "permission" in texto:
                 typer.echo("   -> Problema con la clave: revisá que GEMINI_API_KEY esté bien copiada (sin espacios).")
+            elif razonamiento and ("thinking" in texto or "reasoning" in texto or "400" in texto):
+                typer.echo(f"   -> El modelo no aceptó el nivel de razonamiento '{razonamiento}'. Probá otro con "
+                           "--razonamiento, o dejá  razonamiento: \"\"  en el YAML (sección herramienta).")
     return r.returncode
 
 
 @app.command("probar-llm")
 def probar_llm(modelo: str = typer.Option(MODELO_POR_DEFECTO, help="Ej: gemini/gemini-2.5-flash  u  openai/gpt-4o-mini"),
                api_base: str = typer.Option("", help="Solo para endpoints compatibles con OpenAI"),
-               sin_docker: bool = typer.Option(False, help="Usar litellm local en vez del contenedor")):
+               sin_docker: bool = typer.Option(False, help="Usar litellm local en vez del contenedor"),
+               razonamiento: str = typer.Option("", help="Nivel de razonamiento: minimal|low|medium|high|disable "
+                                                         "(vacío = el del modelo)")):
     """Manda un mensaje corto al modelo para confirmar que la clave y el nombre del modelo funcionan."""
+    if razonamiento not in NIVELES_RAZONAMIENTO:
+        typer.echo(f"Nivel de razonamiento inválido. Opciones: {', '.join(n for n in NIVELES_RAZONAMIENTO if n)}")
+        raise typer.Exit(1)
     variable = clave_api_requerida(modelo)
     if variable and not os.environ.get(variable):
         typer.echo(f"Falta la variable {variable} (la clave de API). Ver GUIA.md, sección 4.")
         raise typer.Exit(1)
-    typer.echo(f"Probando {modelo} ...")
-    codigo = _chequear_llm(modelo, api_base, sin_docker)
+    typer.echo(f"Probando {modelo}" + (f" con razonamiento '{razonamiento}'" if razonamiento else "") + " ...")
+    codigo = _chequear_llm(modelo, api_base, sin_docker, razonamiento=razonamiento)
     typer.echo("\nListo: la IA responde." if codigo == 0 else "\nLa prueba falló: arreglá esto antes de correr el experimento.")
     raise typer.Exit(codigo)
 
@@ -189,9 +203,15 @@ def probar_llm(modelo: str = typer.Option(MODELO_POR_DEFECTO, help="Ej: gemini/g
 @app.command()
 def buscar(maximo: int = typer.Option(20, help="Cantidad máxima de candidatos"),
            estrellas_min: int = typer.Option(10, help="Estrellas mínimas en GitHub"),
-           salida: Path = typer.Option(RAIZ / "resultados" / "candidatos.csv")):
-    """M1: busca repositorios candidatos (Python, sin pruebas, activos) usando la API de GitHub."""
-    seleccion.buscar(salida, maximo=maximo, estrellas_min=estrellas_min)
+           grupo: str = typer.Option("A", help="A = sin pruebas; B = con pruebas"),
+           salida: Optional[Path] = typer.Option(None, help="CSV de salida (por defecto resultados/candidatos_<grupo>.csv)")):
+    """M1: busca repositorios candidatos (Python, activos; sin pruebas o con pruebas según el grupo) en GitHub."""
+    grupo = grupo.strip().upper()
+    if grupo not in ("A", "B"):
+        typer.echo("El grupo tiene que ser A o B.")
+        raise typer.Exit(1)
+    salida = salida or RAIZ / "resultados" / f"candidatos_{grupo}.csv"
+    seleccion.buscar(salida, maximo=maximo, estrellas_min=estrellas_min, grupo=grupo)
 
 
 @app.command()
@@ -236,11 +256,20 @@ def ejecutar(config: Path,
     almacen = Almacen(DB)
     typer.echo("=" * 72)
     typer.echo(f"PIPELINE DE EVALUACIÓN  experimento: {cfg['experimento']['nombre']}")
-    typer.echo(f"IA: {cfg['llm']['modelo']}   ·   repositorios públicos de GitHub: {len(cfg['repositorios'])}")
+    n_a = sum(1 for r in cfg["repositorios"] if r["grupo"] == "A")
+    n_b = len(cfg["repositorios"]) - n_a
+    h = cfg["herramienta"]
+    typer.echo(f"IA: {cfg['llm']['modelo']}   ·   repositorios públicos de GitHub: {n_a} del grupo A (sin pruebas)"
+               f" y {n_b} del grupo B (con pruebas)")
+    typer.echo(f"Consumo: razonamiento '{h['razonamiento'] or 'el del modelo'}' · explicación de fallas "
+               f"{'local (sin IA)' if h['analisis_fallas'] == 'local' else 'con IA'} · hasta {h['max_modulos']} "
+               f"archivos por proyecto, {h['max_iteraciones']} rondas · tope US$ {cfg['limites']['limite_costo_repo_usd']} "
+               "por proyecto")
     typer.echo("=" * 72)
     if chequeo:
         typer.echo("\nChequeo previo  ¿la IA responde con esta clave y este modelo?")
-        if _chequear_llm(cfg["llm"]["modelo"], cfg["llm"]["api_base"], sin_docker) != 0:
+        if _chequear_llm(cfg["llm"]["modelo"], cfg["llm"]["api_base"], sin_docker,
+                         razonamiento=cfg["herramienta"]["razonamiento"]) != 0:
             typer.echo("\nNo se sigue: sin una IA que responda el experimento no produce datos. "
                        "Arreglalo y reintentá (o saltá este chequeo con --sin-chequeo).")
             raise typer.Exit(1)
@@ -257,7 +286,7 @@ def ejecutar(config: Path,
 def prueba(modelo: Optional[str] = typer.Option(None, help="Reemplaza el modelo (ej: gemini/gemini-3-flash)"),
            sin_docker: bool = typer.Option(False, help="Correr sin Docker (plan B)"),
            detalle: bool = typer.Option(False, help="Mostrar comandos y salida cruda de Qodo Cover")):
-    """PRIMERA PRUEBA: 1 repositorio público real de GitHub + Gemini (config/prueba.yaml). Tarda unos 10 minutos."""
+    """PRUEBA RÁPIDA: 1 repositorio del grupo A y 1 del grupo B + Gemini (config/prueba.yaml). Unos 10 minutos."""
     ejecutar(RAIZ / "config" / "prueba.yaml", modelo=modelo, api_base="", sin_docker=sin_docker,
              detalle=detalle, chequeo=True)
 
